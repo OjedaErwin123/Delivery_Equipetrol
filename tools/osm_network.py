@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Extrae la red vial (nodos, segmentos, restaurantes) desde datos de OpenStreetMap.
 
-Lee la zona de simulación de un archivo JSON (bounds de la imagen, polígono, restaurantes,
-calles extra y vistas de revisión; posiciones en píxeles de la imagen de fondo) y produce:
+Lee la zona de simulación de un archivo JSON (bounds de la imagen, polígono, restaurantes
+y vistas de revisión; posiciones en píxeles de la imagen de fondo) y produce:
   - un JSON con `nodes`, `streets` y `restaurants` en el formato de la configuración;
   - imágenes de revisión con la red dibujada sobre el mapa.
 
 Pasos: calles transitables de Overpass -> cortes en intersecciones (nodo de OSM compartido
-por dos o más calles) -> tramos dentro del polígono (o de una calle extra) -> componente
+por dos o más calles) -> tramos enteramente dentro del polígono -> componente
 fuertemente conexa más grande (respetando sentido único, nadie queda atrapado) -> nodos de
 curva con Douglas-Peucker para que ningún segmento recto cruce una manzana -> cada
 restaurante en la intersección más cercana a su punto.
@@ -122,7 +122,6 @@ def largest_scc(edges):
 
 def build(zone, osm, proj):
     poly = [tuple(p) for p in zone["polygon"]]
-    extra = set(zone.get("extraStreets", []))
     coords = {e["id"]: (e["lat"], e["lon"]) for e in osm["elements"] if e["type"] == "node"}
     px = {k: proj.to_px(*v) for k, v in coords.items()}
     ways = [w for w in osm["elements"] if w["type"] == "way" and w["tags"].get("highway") in DRIVABLE
@@ -137,12 +136,11 @@ def build(zone, osm, proj):
         t = w["tags"]
         oneway = t.get("oneway") in ONEWAY or t.get("junction") in ("roundabout", "circular")
         seq = w["nodes"][::-1] if t.get("oneway") == "-1" else w["nodes"]
-        wanted = t.get("name") in extra
         start = 0
         for i in range(1, len(seq)):
             if uses[seq[i]] >= 2 or i == len(seq) - 1:
                 piece = seq[start:i + 1]
-                if wanted or all(inside(px[n], poly) for n in piece):
+                if all(inside(px[n], poly) for n in piece):
                     pieces.append((oneway, piece, t.get("name", "")))
                 start = i
 
