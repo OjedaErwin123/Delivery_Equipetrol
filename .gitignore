@@ -1,0 +1,2 @@
+# Directorios de compilación (build/, build-tsan/, build-clang/, ...)
+/build*/
