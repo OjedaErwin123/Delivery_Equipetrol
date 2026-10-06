@@ -1,0 +1,20 @@
+{
+  "bounds": { "north": -17.7537957, "south": -17.7745163, "west": -63.2060194, "east": -63.1859994 },
+  "zoom": 16,
+  "curveTolerancePx": 2.5,
+  "polygon": [[308, 45], [358, 52], [548, 394], [580, 470], [608, 535], [585, 575], [775, 910], [695, 951],
+              [527, 835], [360, 602], [300, 565], [130, 333]],
+  "restaurants": [
+    { "id": "r0", "name": "Restaurante 0", "px": [314, 244] },
+    { "id": "r1", "name": "Restaurante 1", "px": [382, 349] },
+    { "id": "r2", "name": "Restaurante 2", "px": [417, 457] },
+    { "id": "r3", "name": "Restaurante 3", "px": [482, 642] },
+    { "id": "r4", "name": "Restaurante 4", "px": [404, 605] },
+    { "id": "r5", "name": "Restaurante 5", "px": [521, 576] },
+    { "id": "r6", "name": "Restaurante 6", "px": [583, 675] }
+  ],
+  "views": {
+    "tramo_norte": [120, 130, 560, 600],
+    "tramo_sur": [340, 440, 790, 960]
+  }
+}
