@@ -62,6 +62,10 @@ add_executable(event_log_check tests/event_log_check.cpp src/event_log.cpp)
 delivery_target_options(event_log_check)
 add_test(NAME event_log_check COMMAND event_log_check)
 
+add_executable(courier_check tests/courier_check.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
+delivery_target_options(courier_check)
+add_test(NAME courier_check COMMAND courier_check)
+
 if(ENABLE_TSAN)
   message(STATUS "ThreadSanitizer: activado")
 endif()
