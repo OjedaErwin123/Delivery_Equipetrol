@@ -18,37 +18,50 @@ endif()
 option(ENABLE_TSAN "Instrumentar delivery_sim con ThreadSanitizer" OFF)
 option(DELIVERY_WERROR "Tratar los warnings como errores (solo uso local)" OFF)
 
+if(ENABLE_TSAN AND NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  message(FATAL_ERROR "ENABLE_TSAN requiere GCC o Clang")
+endif()
+
 # --- Dependencias ---
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 find_package(OpenCV 4.1 REQUIRED COMPONENTS core imgproc imgcodecs highgui)
+
+# Opciones comunes a todos los ejecutables del proyecto (el programa y las pruebas):
+# hilos, warnings y, si se pide, ThreadSanitizer al compilar y al enlazar.
+function(delivery_target_options target)
+  target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(${target} PRIVATE Threads::Threads)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${target} PRIVATE -Wall -Wextra)
+    if(DELIVERY_WERROR)
+      target_compile_options(${target} PRIVATE -Werror)
+    endif()
+  endif()
+  if(ENABLE_TSAN)
+    # Van después de las banderas del tipo de build, así que -O1 reemplaza a -O2.
+    target_compile_options(${target} PRIVATE -fsanitize=thread -g -O1 -fno-omit-frame-pointer)
+    # En 3.11 no existe target_link_options: la bandera de enlace va aquí.
+    target_link_libraries(${target} PRIVATE -fsanitize=thread)
+  endif()
+endfunction()
 
 # --- Target principal (nombre obligatorio: delivery_sim) ---
 add_executable(delivery_sim
   src/main.cpp
   src/order_book.cpp
 )
-
+delivery_target_options(delivery_sim)
 # SYSTEM: los warnings de los headers de OpenCV no cuentan como nuestros.
 target_include_directories(delivery_sim SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(delivery_sim PRIVATE ${OpenCV_LIBS} Threads::Threads)
+target_link_libraries(delivery_sim PRIVATE ${OpenCV_LIBS})
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(delivery_sim PRIVATE -Wall -Wextra)
-  if(DELIVERY_WERROR)
-    target_compile_options(delivery_sim PRIVATE -Werror)
-  endif()
-endif()
+# --- Pruebas: se compilan con `make` y se ejecutan con `ctest` ---
+enable_testing()
+add_executable(event_log_check tests/event_log_check.cpp src/event_log.cpp)
+delivery_target_options(event_log_check)
+add_test(NAME event_log_check COMMAND event_log_check)
 
-# --- ThreadSanitizer: mismas banderas al compilar y al enlazar ---
 if(ENABLE_TSAN)
-  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    message(FATAL_ERROR "ENABLE_TSAN requiere GCC o Clang")
-  endif()
-  # Van después de las banderas del tipo de build, así que -O1 reemplaza a -O2.
-  target_compile_options(delivery_sim PRIVATE
-                         -fsanitize=thread -g -O1 -fno-omit-frame-pointer)
-  # En 3.11 no existe target_link_options: la bandera de enlace va aquí.
-  target_link_libraries(delivery_sim PRIVATE -fsanitize=thread)
   message(STATUS "ThreadSanitizer: activado")
 endif()
