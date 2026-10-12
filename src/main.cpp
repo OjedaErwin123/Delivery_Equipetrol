@@ -46,7 +46,8 @@ int main()
     std::thread producer([&book, &refused] {
         for (int i = 0; i < kOrders; ++i) {
             Order order("o" + std::to_string(i), "r" + std::to_string(i % 6), "n" + std::to_string(i % 25), i);
-            if (!book.submit(std::move(order))) {  // aceptado: el pedido pasó al libro
+            // Si se acepta, el pedido pasa al libro y 'order' queda vacío; si no, sigue aquí.
+            if (!book.submit(std::move(order))) {
                 ++refused;
             }
         }
