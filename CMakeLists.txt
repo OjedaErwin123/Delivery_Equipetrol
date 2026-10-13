@@ -66,6 +66,10 @@ add_executable(courier_check tests/courier_check.cpp src/courier.cpp src/order_b
 delivery_target_options(courier_check)
 add_test(NAME courier_check COMMAND courier_check)
 
+add_executable(order_book_check tests/order_book_check.cpp src/order_book.cpp)
+delivery_target_options(order_book_check)
+add_test(NAME order_book_check COMMAND order_book_check)
+
 add_executable(flow_check tests/flow_check.cpp src/simulation.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(flow_check)
 add_test(NAME flow_check COMMAND flow_check)
