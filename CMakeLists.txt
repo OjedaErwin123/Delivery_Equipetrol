@@ -49,7 +49,10 @@ endfunction()
 # --- Target principal (nombre obligatorio: delivery_sim) ---
 add_executable(delivery_sim
   src/main.cpp
+  src/simulation.cpp
+  src/courier.cpp
   src/order_book.cpp
+  src/event_log.cpp
 )
 delivery_target_options(delivery_sim)
 # SYSTEM: los warnings de los headers de OpenCV no cuentan como nuestros.
