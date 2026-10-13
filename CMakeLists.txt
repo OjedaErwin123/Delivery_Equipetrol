@@ -49,7 +49,10 @@ endfunction()
 # --- Target principal (nombre obligatorio: delivery_sim) ---
 add_executable(delivery_sim
   src/main.cpp
+  src/simulation.cpp
+  src/courier.cpp
   src/order_book.cpp
+  src/event_log.cpp
 )
 delivery_target_options(delivery_sim)
 # SYSTEM: los warnings de los headers de OpenCV no cuentan como nuestros.
@@ -65,6 +68,10 @@ add_test(NAME event_log_check COMMAND event_log_check)
 add_executable(courier_check tests/courier_check.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(courier_check)
 add_test(NAME courier_check COMMAND courier_check)
+
+add_executable(order_book_check tests/order_book_check.cpp src/order_book.cpp)
+delivery_target_options(order_book_check)
+add_test(NAME order_book_check COMMAND order_book_check)
 
 add_executable(flow_check tests/flow_check.cpp src/simulation.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(flow_check)
