@@ -11,32 +11,13 @@
 #include <vector>
 
 #include "courier.hpp"
+#include "log_line.hpp"
 
 namespace {
 
 constexpr int kOrders = 10;
 constexpr std::int64_t kLegMs = 2000;  // 2 s simulados por tramo
 constexpr double kTimeScale = 1000.0;  // 1 s simulado = 1 ms real: la prueba dura milisegundos
-
-// Valor del campo de texto `key` en una línea del log ("" si no está).
-std::string field(const std::string& line, const std::string& key)
-{
-    const std::string open = "\"" + key + "\": \"";
-    const auto start = line.find(open);
-    if (start == std::string::npos) {
-        return "";
-    }
-    const auto begin = start + open.size();
-    return line.substr(begin, line.find('"', begin) - begin);
-}
-
-std::int64_t timeOf(const std::string& line) { return std::stoll(line.substr(line.find(':') + 1)); }
-
-bool check(const char* name, bool ok)
-{
-    std::cout << name << ": " << (ok ? "OK" : "FALLA") << "\n";
-    return ok;
-}
 
 }  // namespace
 
