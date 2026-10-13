@@ -66,6 +66,10 @@ add_executable(courier_check tests/courier_check.cpp src/courier.cpp src/order_b
 delivery_target_options(courier_check)
 add_test(NAME courier_check COMMAND courier_check)
 
+add_executable(flow_check tests/flow_check.cpp src/simulation.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
+delivery_target_options(flow_check)
+add_test(NAME flow_check COMMAND flow_check)
+
 if(ENABLE_TSAN)
   message(STATUS "ThreadSanitizer: activado")
 endif()
