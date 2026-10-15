@@ -1,6 +1,7 @@
 #include "config.hpp"
 
 #include <fstream>
+#include <set>
 #include <sstream>
 
 #include <nlohmann/json.hpp>
@@ -75,6 +76,73 @@ std::string resolve(const std::string& baseDir, const std::string& file)
     return baseDir + "/" + file;
 }
 
+// --- Validaciones de significado: las propiedades ya existen y tienen el tipo correcto ---
+
+void require(bool ok, const std::string& message)
+{
+    if (!ok) {
+        throw ConfigError(message);
+    }
+}
+
+// Comprueba que los ids de una lista no se repitan y devuelve el conjunto de ids.
+template <class Item>
+std::set<std::string> uniqueIds(const std::vector<Item>& items, const std::string& list)
+{
+    std::set<std::string> ids;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        require(ids.insert(items[i].id).second,
+                list + "[" + std::to_string(i) + "].id: el id '" + items[i].id + "' está repetido");
+    }
+    return ids;
+}
+
+std::string atLeast(const std::string& path, std::int64_t min, std::int64_t value)
+{
+    return path + ": debe ser al menos " + std::to_string(min) + " (es " + std::to_string(value) + ")";
+}
+
+void validate(const Config& c)
+{
+    require(c.north > c.south && c.east > c.west, "map.bounds: debe cumplir north > south y east > west");
+    require(!c.nodes.empty(), "nodes: debe haber al menos un nodo");
+    const std::set<std::string> nodes = uniqueIds(c.nodes, "nodes");
+    uniqueIds(c.streets, "streets");
+    uniqueIds(c.restaurants, "restaurants");
+    auto nodeExists = [&nodes](const std::string& id, const std::string& path) {
+        require(nodes.count(id) > 0, path + ": el nodo '" + id + "' no existe");
+    };
+
+    for (std::size_t i = 0; i < c.streets.size(); ++i) {
+        const std::string p = "streets[" + std::to_string(i) + "]";
+        nodeExists(c.streets[i].from, p + ".from");
+        nodeExists(c.streets[i].to, p + ".to");
+    }
+    require(!c.restaurants.empty(), "restaurants: debe haber al menos un restaurante");
+    for (std::size_t i = 0; i < c.restaurants.size(); ++i) {
+        const RestaurantConfig& r = c.restaurants[i];
+        const std::string p = "restaurants[" + std::to_string(i) + "]";
+        nodeExists(r.node, p + ".node");
+        require(r.pickupSlots >= 1, atLeast(p + ".pickupSlots", 1, r.pickupSlots));
+        require(r.prepMinMs >= 0 && r.prepMinMs <= r.prepMaxMs,
+                p + ".prepTimeMs: debe ser [mínimo, máximo] con 0 <= mínimo <= máximo");
+    }
+
+    nodeExists(c.startNode, "fleet.startNode");
+    require(c.couriers >= 1, atLeast("fleet.couriers", 1, c.couriers));
+    require(c.bagCapacity >= 1, atLeast("fleet.bagCapacity", 1, c.bagCapacity));
+    require(c.speedKmh > 0, "fleet.speedKmh: debe ser mayor que 0");
+    require(c.meanIntervalMs >= 1, atLeast("orders.meanIntervalMs", 1, c.meanIntervalMs));
+    require(c.burstMax >= 1, atLeast("orders.burstMax", 1, c.burstMax));
+    require(c.maxPending >= 0, atLeast("orders.maxPending", 0, c.maxPending));
+    require(c.quoteTimeoutMs >= 0, atLeast("dispatch.quoteTimeoutMs", 0, c.quoteTimeoutMs));
+    require(c.acceptTimeoutMs >= 0, atLeast("dispatch.acceptTimeoutMs", 0, c.acceptTimeoutMs));
+    require(c.breakdownProbability >= 0 && c.breakdownProbability <= 1,
+            "incidents.breakdownProbability: debe estar entre 0 y 1");
+    require(c.durationS >= 0, atLeast("simulation.durationS", 0, c.durationS));
+    require(c.timeScale > 0, "simulation.timeScale: debe ser mayor que 0");
+}
+
 }  // namespace
 
 Config parseConfig(const std::string& textIn, const std::string& baseDir)
@@ -146,6 +214,7 @@ Config parseConfig(const std::string& textIn, const std::string& baseDir)
     const json& simulation = *property(j, "simulation", "simulation");
     c.durationS = integer(simulation, "durationS", "simulation.durationS");
     c.timeScale = number(simulation, "timeScale", "simulation.timeScale");
+    validate(c);
     return c;
 }
 

@@ -62,8 +62,10 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-// Lee y convierte el archivo. Lanza ConfigError si no se puede leer, si el JSON está mal
-// formado, si falta una propiedad obligatoria o si tiene el tipo equivocado.
+// Lee, convierte y valida el archivo. Lanza ConfigError si no se puede leer, si el JSON está
+// mal formado, si falta una propiedad obligatoria o tiene el tipo equivocado, si una calle,
+// un restaurante o el startNode apuntan a un nodo que no existe, si hay ids repetidos o si un
+// valor está fuera de rango (p. ej. couriers < 1 o timeScale <= 0).
 Config loadConfig(const std::string& path);
 
 // Lo mismo a partir del texto; `baseDir` es la carpeta contra la que se resuelve map.image.
