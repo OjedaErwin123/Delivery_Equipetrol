@@ -16,6 +16,7 @@ restaurante y el punto de partida en la intersección más cercana a su punto.
 Uso:
   tools/osm_network.py --zone tools/zona_equipetrol.json --image data/equipetrol.png \
                        --out config/equipetrol.json --preview-dir docs/red_vial
+  (con --without-streets escribe la configuración con "streets": [])
 """
 import argparse, collections, json, math, os, urllib.parse, urllib.request
 from PIL import Image, ImageDraw
@@ -178,12 +179,12 @@ def config_json(zone, nodes, streets, restaurants, start):
     m = dict(c["map"], bounds=zone["bounds"])
     fleet = dict(c["fleet"], startNode=start)
     dump = lambda v: json.dumps(v, ensure_ascii=False)
-    rows = lambda items: ",\n".join("    " + dump(i) for i in items)
+    rows = lambda items: "[\n%s\n  ]" % ",\n".join("    " + dump(i) for i in items) if items else "[]"
     return ("{\n"
             '  "map": %s,\n' % dump(m) +
-            '  "nodes": [\n%s\n  ],\n' % rows(nodes) +
-            '  "streets": [\n%s\n  ],\n' % rows(streets) +
-            '  "restaurants": [\n%s\n  ],\n' % rows(restaurants) +
+            '  "nodes": %s,\n' % rows(nodes) +
+            '  "streets": %s,\n' % rows(streets) +
+            '  "restaurants": %s,\n' % rows(restaurants) +
             '  "fleet": %s,\n' % dump(fleet) +
             '  "orders": %s,\n' % dump(c["orders"]) +
             '  "dispatch": %s,\n' % dump(c["dispatch"]) +
@@ -231,6 +232,10 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--preview-dir", required=True)
     ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "osm_network.json"))
+    # La configuración se versionó en dos PRs (por tamaño): primero sin calles y después
+    # completa. Esta opción reproduce la primera versión; la red y los nodos no cambian.
+    ap.add_argument("--without-streets", action="store_true",
+                    help="escribir la configuración con \"streets\": [] (la red se calcula igual)")
     a = ap.parse_args()
     with open(a.zone) as f:
         zone = json.load(f)
@@ -238,7 +243,7 @@ def main():
     nodes, streets, street_names, restaurants, start, crossings, pos = build(
         zone, fetch_osm(zone["bounds"], a.cache), proj)
     with open(a.out, "w", encoding="utf-8") as f:
-        f.write(config_json(zone, nodes, streets, restaurants, start))
+        f.write(config_json(zone, nodes, [] if a.without_streets else streets, restaurants, start))
     draw(a.image, zone, streets, restaurants, start, crossings, pos, a.preview_dir)
     print("intersecciones %d · nodos %d · segmentos %d (un sentido %d) · restaurantes %d" % (
         len(crossings), len(nodes), len(streets), sum(s["oneWay"] for s in streets), len(restaurants)))

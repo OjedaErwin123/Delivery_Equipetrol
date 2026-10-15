@@ -31,3 +31,18 @@ La imagen usa proyección Web Mercator: la longitud es lineal en x, la latitud n
 
 Datos del mapa © OpenStreetMap contributors, disponibles bajo la licencia ODbL
 (<https://www.openstreetmap.org/copyright>).
+
+## Configuración
+
+`config/equipetrol.json` sigue el formato de la sección 5 del enunciado. **No se escribe a mano:** lo genera
+`tools/osm_network.py` a partir de `tools/zona_equipetrol.json` (zona, restaurantes, punto de partida y
+parámetros) y de las calles de OpenStreetMap (en caché en `~/.cache/osm_network.json`, así es reproducible):
+
+```sh
+tools/osm_network.py --zone tools/zona_equipetrol.json --image data/equipetrol.png \
+                     --out config/equipetrol.json --preview-dir docs/red_vial
+```
+
+Contiene 154 nodos y 7 restaurantes: Pizza Hut, Aviator, SantaMaria, Pollos Santiago, Sicilia, Pollos Chuy y
+Pizza Bizarra, en orden del 4to al 2do Anillo. Por ahora `streets` está vacío (se generó con
+`--without-streets`): las calles se agregan en el PR siguiente.
