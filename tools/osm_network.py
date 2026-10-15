@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Extrae la red vial (nodos, segmentos, restaurantes) desde datos de OpenStreetMap.
+"""Genera la configuración de la simulación con la red vial extraída de OpenStreetMap.
 
-Lee la zona de simulación de un archivo JSON (bounds de la imagen, polígono, restaurantes
-y vistas de revisión; posiciones en píxeles de la imagen de fondo) y produce:
-  - un JSON con `nodes`, `streets` y `restaurants` en el formato de la configuración;
+Lee la zona de simulación de un archivo JSON (bounds de la imagen, polígono, restaurantes,
+punto de partida de las motos, resto de los parámetros y vistas de revisión; las posiciones
+en píxeles de la imagen de fondo) y produce:
+  - el archivo de configuración completo, con el formato de la sección 5 del enunciado;
   - imágenes de revisión con la red dibujada sobre el mapa.
 
 Pasos: calles transitables de Overpass -> cortes en intersecciones (nodo de OSM compartido
 por dos o más calles) -> tramos enteramente dentro del polígono -> componente
 fuertemente conexa más grande (respetando sentido único, nadie queda atrapado) -> nodos de
 curva con Douglas-Peucker para que ningún segmento recto cruce una manzana -> cada
-restaurante en la intersección más cercana a su punto.
+restaurante y el punto de partida en la intersección más cercana a su punto.
 
 Uso:
   tools/osm_network.py --zone tools/zona_equipetrol.json --image data/equipetrol.png \
-                       --out red_vial.json --preview-dir docs/red_vial
+                       --out config/equipetrol.json --preview-dir docs/red_vial
 """
 import argparse, collections, json, math, os, urllib.parse, urllib.request
 from PIL import Image, ImageDraw
@@ -147,7 +148,7 @@ def build(zone, osm, proj):
     scc = largest_scc([(p[0], p[-1], ow) for ow, p, _ in pieces])
     pieces = [x for x in pieces if x[1][0] in scc and x[1][-1] in scc]
 
-    nodes, ids, streets = [], {}, []
+    nodes, ids, streets, street_names = [], {}, [], {}
     def node_id(n):
         if n not in ids:
             ids[n] = "n%d" % len(nodes)
@@ -156,20 +157,42 @@ def build(zone, osm, proj):
     for oneway, piece, name in pieces:
         chain = [piece[k] for k in douglas_peucker([px[n] for n in piece], zone["curveTolerancePx"])]
         for u, v in zip(chain, chain[1:]):
-            streets.append({"id": "s%d" % len(streets), "from": node_id(u), "to": node_id(v),
-                            "oneWay": oneway, "name": name})
+            sid = "s%d" % len(streets)
+            streets.append({"id": sid, "from": node_id(u), "to": node_id(v), "oneWay": oneway})
+            street_names[sid] = name  # solo para el informe por consola: no es parte del formato
     crossings = {ids[n] for n in ids if uses[n] >= 2}
 
     pos = {nd["id"]: proj.to_px(nd["lat"], nd["lon"]) for nd in nodes}
-    restaurants = []
-    for r in zone["restaurants"]:
-        rx, ry = r["px"]
-        best = min(sorted(crossings), key=lambda k: math.hypot(pos[k][0] - rx, pos[k][1] - ry))
-        restaurants.append({"id": r["id"], "name": r["name"], "node": best})
-    return nodes, streets, restaurants, crossings, pos
+    def nearest_crossing(point):
+        x, y = point
+        return min(sorted(crossings), key=lambda k: math.hypot(pos[k][0] - x, pos[k][1] - y))
+    restaurants = [{"id": r["id"], "name": r["name"], "node": nearest_crossing(r["px"]),
+                    "pickupSlots": r["pickupSlots"], "prepTimeMs": r["prepTimeMs"]} for r in zone["restaurants"]]
+    start = nearest_crossing(zone["startPx"])
+    return nodes, streets, street_names, restaurants, start, crossings, pos
 
 
-def draw(image, zone, streets, restaurants, crossings, pos, out_dir):
+def config_json(zone, nodes, streets, restaurants, start):
+    """La configuración completa (sección 5 del enunciado), un elemento por línea en las listas."""
+    c = zone["config"]
+    m = dict(c["map"], bounds=zone["bounds"])
+    fleet = dict(c["fleet"], startNode=start)
+    dump = lambda v: json.dumps(v, ensure_ascii=False)
+    rows = lambda items: ",\n".join("    " + dump(i) for i in items)
+    return ("{\n"
+            '  "map": %s,\n' % dump(m) +
+            '  "nodes": [\n%s\n  ],\n' % rows(nodes) +
+            '  "streets": [\n%s\n  ],\n' % rows(streets) +
+            '  "restaurants": [\n%s\n  ],\n' % rows(restaurants) +
+            '  "fleet": %s,\n' % dump(fleet) +
+            '  "orders": %s,\n' % dump(c["orders"]) +
+            '  "dispatch": %s,\n' % dump(c["dispatch"]) +
+            '  "incidents": %s,\n' % dump(c["incidents"]) +
+            '  "simulation": %s\n' % dump(c["simulation"]) +
+            "}\n")
+
+
+def draw(image, zone, streets, restaurants, start, crossings, pos, out_dir):
     img = Image.open(image).convert("RGB")
     d = ImageDraw.Draw(img)
     d.polygon([tuple(p) for p in zone["polygon"]], outline=(0, 0, 0))
@@ -186,9 +209,13 @@ def draw(image, zone, streets, restaurants, crossings, pos, out_dir):
     for r, z in zip(restaurants, zone["restaurants"]):
         x, y = pos[r["node"]]
         d.rectangle([x - 7, y - 7, x + 7, y + 7], fill=(0, 160, 60), outline=(0, 0, 0))
-        d.text((x + 9, y - 6), r["id"], fill=(0, 0, 0))
+        label = "%s %s" % (r["id"], r["name"])
+        d.rectangle([x + 8, y - 8, x + 12 + d.textlength(label), y + 6], fill=(255, 255, 255))
+        d.text((x + 10, y - 7), label, fill=(0, 0, 0))
         zx, zy = z["px"]
         d.ellipse([zx - 3, zy - 3, zx + 3, zy + 3], outline=(0, 160, 60), width=2)
+    sx, sy = pos[start]  # punto de partida de las motos
+    d.polygon([(sx, sy - 9), (sx + 9, sy), (sx, sy + 9), (sx - 9, sy)], fill=(255, 200, 0), outline=(0, 0, 0))
     os.makedirs(out_dir, exist_ok=True)
     img.save(os.path.join(out_dir, "red_vial_completa.png"), optimize=True)
     for name, box in zone["views"].items():
@@ -208,15 +235,20 @@ def main():
     with open(a.zone) as f:
         zone = json.load(f)
     proj = Projection(zone["bounds"], zone["zoom"])
-    nodes, streets, restaurants, crossings, pos = build(zone, fetch_osm(zone["bounds"], a.cache), proj)
-    with open(a.out, "w") as f:
-        json.dump({"nodes": nodes, "streets": streets, "restaurants": restaurants}, f, ensure_ascii=False, indent=1)
-    draw(a.image, zone, streets, restaurants, crossings, pos, a.preview_dir)
+    nodes, streets, street_names, restaurants, start, crossings, pos = build(
+        zone, fetch_osm(zone["bounds"], a.cache), proj)
+    with open(a.out, "w", encoding="utf-8") as f:
+        f.write(config_json(zone, nodes, streets, restaurants, start))
+    draw(a.image, zone, streets, restaurants, start, crossings, pos, a.preview_dir)
     print("intersecciones %d · nodos %d · segmentos %d (un sentido %d) · restaurantes %d" % (
         len(crossings), len(nodes), len(streets), sum(s["oneWay"] for s in streets), len(restaurants)))
+    def corner(node):
+        return " y ".join(sorted({street_names[s["id"]] for s in streets
+                                  if node in (s["from"], s["to"]) and street_names[s["id"]]}))
     for r in restaurants:
-        names = sorted({s["name"] for s in streets if r["node"] in (s["from"], s["to"]) and s["name"]})
-        print("  %s %-10s %s  %s" % (r["id"], r["name"], r["node"], " y ".join(names)))
+        print("  %s %-16s %-5s slots=%d prep=%s  %s" % (r["id"], r["name"], r["node"], r["pickupSlots"],
+                                                       r["prepTimeMs"], corner(r["node"])))
+    print("  partida de las motos: %s  %s" % (start, corner(start)))
 
 
 if __name__ == "__main__":
