@@ -104,6 +104,11 @@ add_executable(flow_check tests/flow_check.cpp src/simulation.cpp src/courier.cp
 delivery_target_options(flow_check)
 add_test(NAME flow_check COMMAND flow_check)
 
+add_executable(json_check tests/json_check.cpp src/simulation.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
+delivery_target_options(json_check)
+target_link_libraries(json_check PRIVATE nlohmann_json)
+add_test(NAME json_check COMMAND json_check)
+
 if(ENABLE_TSAN)
   message(STATUS "ThreadSanitizer: activado")
 endif()
