@@ -1,21 +1,18 @@
-// Punto de entrada provisional: solo demuestra que el esqueleto compila y enlaza
-// con los hilos de la biblioteca estándar y con OpenCV. Se reemplaza en los PRs
-// siguientes (carga de configuración, simulación, ventana).
+// delivery_sim: flujo básico de la simulación (v0). Parámetros fijos en el código;
+// todavía sin mapa, restaurantes con puestos, estimaciones, averías ni ventana.
+#include <fstream>
 #include <iostream>
-#include <string>
-#include <thread>
 
-#include <opencv2/core/utility.hpp>
+#include "simulation.hpp"
 
 int main()
 {
-    std::string opencvVersion;
-
-    // El hilo escribe y main lee después del join(): el join establece el
-    // happens-before, así que no hay data race sobre opencvVersion.
-    std::thread worker([&opencvVersion] { opencvVersion = cv::getVersionString(); });
-    worker.join();
-
-    std::cout << "delivery_sim: esqueleto OK (OpenCV " << opencvVersion << ")\n";
+    std::ofstream log("events.log");
+    if (!log) {
+        std::cerr << "delivery_sim: no se pudo abrir events.log para escribir\n";
+        return 1;
+    }
+    const Summary summary = runSimulation(SimParams{}, log, std::cout);
+    std::cout << toJson(summary) << "\n";  // última línea de stdout
     return 0;
 }
