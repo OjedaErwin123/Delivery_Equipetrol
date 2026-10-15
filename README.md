@@ -43,6 +43,5 @@ tools/osm_network.py --zone tools/zona_equipetrol.json --image data/equipetrol.p
                      --out config/equipetrol.json --preview-dir docs/red_vial
 ```
 
-Contiene 154 nodos y 7 restaurantes: Pizza Hut, Aviator, SantaMaria, Pollos Santiago, Sicilia, Pollos Chuy y
-Pizza Bizarra, en orden del 4to al 2do Anillo. Por ahora `streets` está vacío (se generó con
-`--without-streets`): las calles se agregan en el PR siguiente.
+Contiene 154 nodos, 219 calles (151 de un solo sentido) y 7 restaurantes: Pizza Hut, Aviator, SantaMaria,
+Pollos Santiago, Sicilia, Pollos Chuy y Pizza Bizarra, en orden del 4to al 2do Anillo.
