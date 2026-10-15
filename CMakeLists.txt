@@ -27,6 +27,33 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 find_package(OpenCV 4.1 REQUIRED COMPONENTS core imgproc imgcodecs highgui)
 
+# JSON: nlohmann/json 3.12.0 (MIT, solo headers). FetchContent lo descarga al configurar
+# (necesita internet en `cmake ..`): solo los headers del release, verificados por hash.
+# FetchContent existe desde CMake 3.11; FetchContent_MakeAvailable es de 3.14, por eso
+# se usa FetchContent_Populate.
+include(FetchContent)
+# Las políticas solo existen en CMake nuevos (en 3.11 estos if no hacen nada):
+#  - CMP0135 (3.24): los archivos extraídos llevan la fecha de extracción.
+#  - CMP0169 (3.30): permite seguir llamando FetchContent_Populate(nombre), que es la
+#    forma que existe en 3.11 (los CMake nuevos la marcan como obsoleta).
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+endif()
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)
+endif()
+FetchContent_Declare(nlohmann_json
+  URL https://github.com/nlohmann/json/releases/download/v3.12.0/include.zip
+  URL_HASH SHA256=b8cb0ef2dd7f57f18933997c9934bb1fa962594f701cd5a8d3c2c80541559372
+)
+FetchContent_GetProperties(nlohmann_json)
+if(NOT nlohmann_json_POPULATED)
+  FetchContent_Populate(nlohmann_json)
+endif()
+add_library(nlohmann_json INTERFACE)
+# SYSTEM: los warnings de la biblioteca no cuentan como nuestros.
+target_include_directories(nlohmann_json SYSTEM INTERFACE ${nlohmann_json_SOURCE_DIR}/single_include)
+
 # Opciones comunes a todos los ejecutables del proyecto (el programa y las pruebas):
 # hilos, warnings y, si se pide, ThreadSanitizer al compilar y al enlazar.
 function(delivery_target_options target)
