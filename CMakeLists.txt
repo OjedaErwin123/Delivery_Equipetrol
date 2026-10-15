@@ -109,6 +109,11 @@ delivery_target_options(json_check)
 target_link_libraries(json_check PRIVATE nlohmann_json)
 add_test(NAME json_check COMMAND json_check)
 
+add_executable(config_check tests/config_check.cpp src/config.cpp)
+delivery_target_options(config_check)
+target_link_libraries(config_check PRIVATE nlohmann_json)
+add_test(NAME config_check COMMAND config_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
+
 if(ENABLE_TSAN)
   message(STATUS "ThreadSanitizer: activado")
 endif()
