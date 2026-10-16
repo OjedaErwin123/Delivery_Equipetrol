@@ -76,6 +76,7 @@ int main(int argc, char** argv)
     // 4. Una configuración válida donde todos los nodos son de restaurantes: igual hay destinos.
     Config tiny = c;
     tiny.nodes = {{"n0", -17.76, -63.19}};
+    tiny.streets.clear();  // válida: sin calles que apunten a nodos que ya no están
     tiny.restaurants = {{"r0", "R0", "n0", 1, 0, 0}};
     const SimParams q = paramsFromConfig(tiny);
     ok &= check("si todos los nodos son de restaurantes, cualquier nodo sirve de destino",
