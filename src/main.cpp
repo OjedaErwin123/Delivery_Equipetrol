@@ -12,7 +12,11 @@ int main()
         std::cerr << "delivery_sim: no se pudo abrir events.log para escribir\n";
         return 1;
     }
-    const Summary summary = runSimulation(SimParams{}, log, std::cout);
+    // Fin por tiempo: 80 min simulados (~80 s reales con timeScale 60). A un pedido cada
+    // 36 s en promedio salen ~133, menos que `orders`: se detiene con pedidos pendientes.
+    SimParams params;
+    params.durationS = 4800;
+    const Summary summary = runSimulation(params, log, std::cout);
     std::cout << toJson(summary) << "\n";  // última línea de stdout
     return 0;
 }

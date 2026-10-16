@@ -39,6 +39,16 @@ void OrderBook::close()
     _ready.notify_all();
 }
 
+void OrderBook::abort()
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _closed = true;
+        _orders.clear();
+    }
+    _ready.notify_all();
+}
+
 std::size_t OrderBook::size() const
 {
     std::lock_guard<std::mutex> lock(_mutex);

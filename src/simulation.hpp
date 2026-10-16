@@ -18,6 +18,7 @@ struct SimParams {
     std::int64_t legMs = 60000;           // duración simulada de cada tramo de viaje
     double timeScale = 60.0;              // segundos simulados por segundo real
     std::uint32_t seed = 42;
+    std::int64_t durationS = 0;           // fin por tiempo simulado; 0 = sin límite (termina al entregar `orders`)
 };
 
 // Resumen final (sección 6.3). Los campos que esta versión todavía no produce
@@ -32,6 +33,8 @@ struct Summary {
 
 // Corre la simulación completa: imprime la línea de inicio en `out`, escribe los
 // eventos en `logOut`, y vuelve recién cuando todos los hilos terminaron (join).
+// Si se cumple `durationS`, registra simulationStopping, detiene todos los hilos y lo que
+// no se entregó queda pendiente (pending = created - delivered en el resumen).
 Summary runSimulation(const SimParams& params, std::ostream& logOut, std::ostream& out);
 
 // El resumen como una línea JSON, con el formato del enunciado.
