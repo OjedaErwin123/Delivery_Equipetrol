@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <set>
 #include <stdexcept>
 #include <thread>
 
@@ -30,15 +31,15 @@ std::int64_t nextIntervalMs(std::mt19937& rng, std::int64_t meanMs)
 // Hilo generador: crea los pedidos y los deja en el libro. Devuelve cuántos creó.
 // Cada pedido tiene su instante planificado (suma de intervalos) y se crea con ese t:
 // así ninguno queda con t >= durationS*1000 aunque el hilo despierte unos ms tarde.
-// Al llegar a `orders` cierra el libro (fin natural); si se cumple `durationS` o se pide
-// parar, solo deja de crear: el libro lo descarta quien ordena la detención.
+// Si hay tope (`orders` > 0), al llegar a él cierra el libro (fin natural); si se cumple
+// `durationS` o se pide parar, solo deja de crear: el libro lo descarta quien ordena la detención.
 int generateOrders(const SimParams& p, const SimClock& clock, EventLog& log, OrderBook& book,
                    const Shutdown& shutdown)
 {
     std::mt19937 rng(p.seed);  // propio de este hilo: nadie más lo usa
     const std::int64_t endMs = p.durationS * 1000;
     std::int64_t plannedMs = 0;
-    for (int i = 0; i < p.orders; ++i) {
+    for (int i = 0; p.orders == 0 || i < p.orders; ++i) {
         plannedMs += nextIntervalMs(rng, p.meanIntervalMs);
         if (p.durationS > 0 && plannedMs >= endMs) {
             return i;  // el próximo pedido caería después del fin: no se crea
@@ -46,8 +47,8 @@ int generateOrders(const SimParams& p, const SimClock& clock, EventLog& log, Ord
         if (shutdown.sleepUntil(clock.realTimeAt(plannedMs))) {
             return i;  // espera interrumpible: se pidió parar
         }
-        const std::string restaurant = "r" + std::to_string(rng() % p.restaurants);
-        const std::string destination = "n" + std::to_string(rng() % p.nodes);
+        const std::string& restaurant = p.restaurants[rng() % p.restaurants.size()];
+        const std::string& destination = p.destinations[rng() % p.destinations.size()];
         Order order("o" + std::to_string(i), restaurant, destination, plannedMs);
 
         Event e;  // se registra antes de soltar el pedido: ningún evento suyo puede adelantarse
@@ -104,6 +105,41 @@ void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
 }
 
 }  // namespace
+
+SimParams paramsFromConfig(const Config& c)
+{
+    SimParams p;
+    p.couriers = static_cast<int>(c.couriers);
+    p.orders = 0;  // los pedidos se crean de forma continua durante toda la ejecución
+    p.meanIntervalMs = c.meanIntervalMs;
+    p.timeScale = c.timeScale;
+    p.seed = static_cast<std::uint32_t>(c.seed);
+    p.durationS = c.durationS;
+
+    // Destino (decisión "C"): un nodo de la red que no sea de un restaurante. El formato no
+    // tiene casas, así que el punto de entrega lo elige la simulación entre esos nodos.
+    std::set<std::string> restaurantNodes;
+    p.restaurants.clear();
+    for (const RestaurantConfig& r : c.restaurants) {
+        p.restaurants.push_back(r.id);
+        restaurantNodes.insert(r.node);
+    }
+    p.destinations.clear();
+    for (const NodeConfig& n : c.nodes) {
+        if (restaurantNodes.count(n.id) == 0) {
+            p.destinations.push_back(n.id);
+        }
+    }
+    // Una configuración válida puede tener solo nodos de restaurantes (p. ej. un nodo y un
+    // restaurante): rechazarla contradiría "cualquier archivo válido se ejecuta". Entonces
+    // cualquier nodo sirve de destino.
+    if (p.destinations.empty()) {
+        for (const NodeConfig& n : c.nodes) {
+            p.destinations.push_back(n.id);
+        }
+    }
+    return p;
+}
 
 Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& out)
 {
