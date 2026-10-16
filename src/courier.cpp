@@ -17,16 +17,20 @@ void Courier::run()
         if (_shutdown.sleepUntil(_clock.realTimeIn(_legMs))) {  // viaje al restaurante
             return;
         }
+        // Un evento negado (se pidió parar, o su t ya pasó el fin) también corta: el pedido queda pendiente.
         const std::int64_t pickedAt = _clock.nowMs();
-        logEvent("pickupStarted", *order, pickedAt, true);
-        logEvent("orderPickedUp", *order, pickedAt, true);
+        if (!logEvent("pickupStarted", *order, pickedAt, true) || !logEvent("orderPickedUp", *order, pickedAt, true)) {
+            return;
+        }
 
         if (_shutdown.sleepUntil(_clock.realTimeIn(_legMs))) {  // viaje al cliente
             return;
         }
         // El mismo t va al log y a las estadísticas: el resumen debe coincidir con el log.
         const std::int64_t deliveredAt = _clock.nowMs();
-        logEvent("orderDelivered", *order, deliveredAt, false);
+        if (!logEvent("orderDelivered", *order, deliveredAt, false)) {
+            return;
+        }
 
         const std::int64_t took = deliveredAt - order->createdAtMs();
         ++_delivered;
@@ -35,7 +39,7 @@ void Courier::run()
     }
 }
 
-void Courier::logEvent(const char* event, const Order& order, std::int64_t t, bool withRestaurant)
+bool Courier::logEvent(const char* event, const Order& order, std::int64_t t, bool withRestaurant)
 {
     Event e;
     e.t = t;
@@ -45,5 +49,5 @@ void Courier::logEvent(const char* event, const Order& order, std::int64_t t, bo
     if (withRestaurant) {
         e.restaurant = order.restaurant();
     }
-    _log.write(e);
+    return _shutdown.unlessStopped(t, [this, &e] { _log.write(e); });
 }

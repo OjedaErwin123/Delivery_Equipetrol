@@ -57,7 +57,7 @@ int generateOrders(const SimParams& p, const SimClock& clock, EventLog& log, Ord
         e.restaurant = restaurant;
         // Comprobar y registrar en una sola operación: si no, se podría pedir parar entre
         // las dos y este orderCreated quedaría en el log después de simulationStopping.
-        if (!shutdown.unlessStopped([&log, &e] { log.write(e); })) {
+        if (!shutdown.unlessStopped(e.t, [&log, &e] { log.write(e); })) {
             return i;
         }
         if (!book.submit(std::move(order))) {
@@ -88,7 +88,9 @@ void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
         e.event = "orderAssigned";
         e.order = order->id();
         e.courier = courier.id();
-        log.write(e);
+        if (!shutdown.unlessStopped(e.t, [&log, &e] { log.write(e); })) {
+            break;  // se detuvo (o su t ya pasó el fin): el pedido queda pendiente
+        }
         if (!courier.inbox().submit(std::move(*order))) {
             if (shutdown.requested()) {
                 break;
@@ -107,7 +109,8 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
 {
     EventLog log(logOut);
     OrderBook book;
-    Shutdown shutdown;
+    const std::int64_t endMs = p.durationS * 1000;
+    Shutdown shutdown(endMs);  // niega todo evento con t >= endMs: nada queda registrado después del fin
     const SimClock clock(p.timeScale);  // t = 0
 
     // Hilos que siguen corriendo. Es UN valor que todos tocan: atomic, y fetch_sub (RMW)
@@ -145,14 +148,25 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
     // Bucle de frames (~30 por segundo): no es espera activa, el hilo duerme entre frames y
     // casi no usa CPU. El enunciado permite pausar para regular los FPS de la ventana: aquí
     // irá el dibujado, y la bandera de la señal (SIGINT/SIGTERM) se revisará aquí mismo.
-    const std::int64_t endMs = p.durationS * 1000;
+    // Duerme hasta el próximo frame o hasta el fin, lo que llegue antes: el fin se detecta
+    // a tiempo y no hasta un frame tarde. Se compara en tiempo real (sleep_until garantiza
+    // despertar en o después de `endReal`), así no hay que reintentar por redondeos.
+    // El tiempo se mira ANTES que `running`: pasado el fin, a las motos se les niegan los
+    // eventos y terminan solas; si se mirara `running` primero, podría llegar a 0 y se
+    // saldría sin registrar simulationStopping.
+    const auto endReal = clock.realTimeAt(endMs);
     bool stopped = false;
-    while (running.load() > 0) {
-        if (p.durationS > 0 && clock.nowMs() >= endMs) {
+    for (;;) {
+        const auto now = std::chrono::steady_clock::now();
+        if (p.durationS > 0 && now >= endReal) {
             stopped = true;
             break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(33));
+        if (running.load() == 0) {
+            break;  // fin natural: se entregaron todos los pedidos antes del fin
+        }
+        const auto nextFrame = now + std::chrono::milliseconds(33);
+        std::this_thread::sleep_until(p.durationS > 0 ? std::min(nextFrame, endReal) : nextFrame);
     }
 
     if (stopped) {
@@ -160,8 +174,8 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         Event e;
         e.t = endMs;
         e.event = "simulationStopping";
-        // Pedir parar y registrarlo en una sola operación: ningún orderCreated puede quedar
-        // después en el log. La orden despierta a quien duerme en un tramo o esperando el
+        // Pedir parar y registrarlo en una sola operación: ningún evento puede quedar después
+        // en el log (todos pasan por unlessStopped). La orden despierta a quien duerme en un tramo o esperando el
         // próximo pedido; luego se descarta lo que espera en el libro y en las bandejas:
         // todo eso queda pendiente, y cada take() bloqueado devuelve std::nullopt.
         shutdown.request([&log, &e] { log.write(e); });

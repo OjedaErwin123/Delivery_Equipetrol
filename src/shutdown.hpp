@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
 
 // La orden de parar la simulación, compartida por todos los hilos: un monitor.
@@ -14,8 +15,14 @@
 // Las acciones de request() y unlessStopped() corren con _mutex tomado, así "comprobar y
 // actuar" es una sola operación (sin check-then-act). Pueden tomar otro lock (el del log),
 // pero nunca uno que se tome antes que este: el orden es siempre Shutdown -> log.
+//
+// Todo evento del log se registra con unlessStopped: así simulationStopping (la acción de
+// request) es siempre el último evento, y ninguno tiene t posterior al fin.
 class Shutdown {
 public:
+    // `endMs`: instante simulado del fin por tiempo (0 = sin límite). Es const: no hay data race.
+    explicit Shutdown(std::int64_t endMs = 0) : _endMs(endMs) {}
+
     // Pide parar, corre `action` en la misma sección crítica (p. ej. registrar
     // simulationStopping) y despierta a todos los que duermen.
     template <typename Action>
@@ -34,13 +41,14 @@ public:
         request([] {});
     }
 
-    // Corre `action` solo si todavía no se pidió parar, con el lock tomado: lo que haga
-    // queda antes de la acción de request(). Devuelve false si ya se había pedido parar.
+    // Corre `action` (registrar un evento con tiempo `t`) solo si todavía no se pidió parar
+    // y `t` es anterior al fin, con el lock tomado: lo que haga queda antes de la acción de
+    // request(). Devuelve false si no la corrió: quien llama debe abandonar lo que hacía.
     template <typename Action>
-    bool unlessStopped(Action action) const
+    bool unlessStopped(std::int64_t t, Action action) const
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        if (_requested) {
+        if (_requested || (_endMs > 0 && t >= _endMs)) {
             return false;
         }
         action();
@@ -64,5 +72,6 @@ public:
 private:
     mutable std::mutex _mutex;
     mutable std::condition_variable _cv;
+    const std::int64_t _endMs;
     bool _requested = false;
 };

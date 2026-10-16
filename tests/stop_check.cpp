@@ -32,14 +32,18 @@ int main()
     int delivered = 0;
     int stopping = 0;
     bool createdBeforeEnd = true;
-    bool noneAfterStopping = true;  // en el orden del archivo, no solo por t
+    bool noneAfterStopping = true;  // ningún evento después de simulationStopping, en el orden del archivo
+    bool allBeforeEnd = true;       // y ninguno con t >= durationS*1000: la simulación ya terminó
     std::istringstream in(logOut.str());
     for (std::string line; std::getline(in, line);) {
         const std::string event = field(line, "event");
+        if (event != "simulationStopping") {
+            noneAfterStopping = noneAfterStopping && stopping == 0;
+            allBeforeEnd = allBeforeEnd && timeOf(line) < endMs;
+        }
         if (event == "orderCreated") {
             ++created;
             createdBeforeEnd = createdBeforeEnd && timeOf(line) < endMs;
-            noneAfterStopping = noneAfterStopping && stopping == 0;
         } else if (event == "orderDelivered") {
             ++delivered;
         } else if (event == "simulationStopping") {
@@ -53,7 +57,8 @@ int main()
     bool ok = true;
     ok &= check("un solo simulationStopping", stopping == 1);
     ok &= check("ningún pedido creado desde el fin; simulationStopping con t = durationS*1000", createdBeforeEnd);
-    ok &= check("ningún orderCreated después de simulationStopping en el log", noneAfterStopping);
+    ok &= check("simulationStopping es el último evento del log", noneAfterStopping);
+    ok &= check("ningún evento con t >= durationS*1000", allBeforeEnd);
     ok &= check("resumen igual al log", s.created == created && s.delivered == delivered);
     ok &= check("quedan pendientes (había motos a mitad de tramo)", created - delivered > 0);
     // 200 ms de simulación + margen: los hilos no esperan a terminar su tramo.

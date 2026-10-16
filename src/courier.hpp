@@ -34,7 +34,8 @@ public:
     std::int64_t maxDeliveryMs() const { return _maxDeliveryMs; }
 
 private:
-    void logEvent(const char* event, const Order& order, std::int64_t t, bool withRestaurant);
+    // Registra el evento salvo que se haya pedido parar o `t` ya pase el fin; false si no lo registró.
+    bool logEvent(const char* event, const Order& order, std::int64_t t, bool withRestaurant);
 
     const std::string _id;
     const SimClock& _clock;
