@@ -21,13 +21,20 @@
 //   - notify después de soltar el lock: el hilo despertado no choca con un mutex aún tomado.
 class OrderBook {
 public:
-    OrderBook() = default;
+    // Qué pasó con un submit.
+    enum class Submit { accepted, full, closed };
+
+    // `capacity`: máximo de pedidos esperando adentro (maxPending); sin valor, sin límite
+    // (las bandejas de las motos). Con 0 no acepta ninguno.
+    explicit OrderBook(std::optional<std::size_t> capacity = std::nullopt) : _capacity(capacity) {}
     OrderBook(const OrderBook&) = delete;
     OrderBook& operator=(const OrderBook&) = delete;
 
-    // Agrega un pedido al final. Si el libro ya está cerrado devuelve false y NO
-    // consume el pedido (sigue en manos de quien llamó): un pedido nunca se pierde en silencio.
-    [[nodiscard]] bool submit(Order&& order);
+    // Agrega un pedido al final. Si el libro está lleno o cerrado lo dice y NO consume el
+    // pedido (sigue en manos de quien llamó): un pedido nunca se pierde en silencio.
+    // Mirar el tamaño y agregar es una sola operación con el lock tomado: comprobarlo
+    // desde afuera con size() y después llamar a submit() sería check-then-act.
+    [[nodiscard]] Submit submit(Order&& order);
 
     // Bloquea sin consumir CPU hasta que haya un pedido o el libro esté cerrado.
     // Devuelve std::nullopt solo cuando está cerrado y vacío: señal para dejar de consumir.
@@ -43,6 +50,7 @@ public:
     std::size_t size() const;
 
 private:
+    const std::optional<std::size_t> _capacity;
     mutable std::mutex _mutex;
     std::condition_variable _ready;
     std::deque<Order> _orders;

@@ -112,6 +112,10 @@ delivery_target_options(json_check)
 target_link_libraries(json_check PRIVATE nlohmann_json)
 add_test(NAME json_check COMMAND json_check)
 
+add_executable(orders_check tests/orders_check.cpp src/simulation.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
+delivery_target_options(orders_check)
+add_test(NAME orders_check COMMAND orders_check)
+
 add_executable(stop_check tests/stop_check.cpp src/simulation.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(stop_check)
 add_test(NAME stop_check COMMAND stop_check)
