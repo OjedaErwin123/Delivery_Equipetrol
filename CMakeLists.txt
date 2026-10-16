@@ -119,6 +119,10 @@ delivery_target_options(signal_check)
 add_test(NAME signal_check_int COMMAND signal_check INT)
 add_test(NAME signal_check_term COMMAND signal_check TERM)
 
+add_executable(restaurant_check tests/restaurant_check.cpp src/restaurant.cpp)
+delivery_target_options(restaurant_check)
+add_test(NAME restaurant_check COMMAND restaurant_check)
+
 add_executable(config_check tests/config_check.cpp src/config.cpp)
 delivery_target_options(config_check)
 target_link_libraries(config_check PRIVATE nlohmann_json)
