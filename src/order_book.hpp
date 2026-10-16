@@ -36,6 +36,10 @@ public:
     // No llegarán más pedidos. Despierta a TODOS los que esperan para que ninguno quede bloqueado.
     void close();
 
+    // Cierre por detención: como close(), pero descarta lo que quede, así take() devuelve
+    // std::nullopt de inmediato. Los pedidos descartados no terminaron: quedan pendientes.
+    void abort();
+
     std::size_t size() const;
 
 private:

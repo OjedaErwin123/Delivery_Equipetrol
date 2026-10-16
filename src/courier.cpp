@@ -4,20 +4,26 @@
 #include <optional>
 #include <utility>
 
-Courier::Courier(std::string id, const SimClock& clock, EventLog& log, std::int64_t legMs)
-    : _id(std::move(id)), _clock(clock), _log(log), _legMs(legMs)
+Courier::Courier(std::string id, const SimClock& clock, EventLog& log, const Shutdown& shutdown,
+                 std::int64_t legMs)
+    : _id(std::move(id)), _clock(clock), _log(log), _shutdown(shutdown), _legMs(legMs)
 {
 }
 
 void Courier::run()
 {
     while (std::optional<Order> order = _inbox.take()) {
-        _clock.sleepSim(_legMs);  // viaje al restaurante
+        // Cada tramo es una espera interrumpible: si se pide parar, el pedido queda pendiente.
+        if (_shutdown.sleepUntil(_clock.realTimeIn(_legMs))) {  // viaje al restaurante
+            return;
+        }
         const std::int64_t pickedAt = _clock.nowMs();
         logEvent("pickupStarted", *order, pickedAt, true);
         logEvent("orderPickedUp", *order, pickedAt, true);
 
-        _clock.sleepSim(_legMs);  // viaje al cliente
+        if (_shutdown.sleepUntil(_clock.realTimeIn(_legMs))) {  // viaje al cliente
+            return;
+        }
         // El mismo t va al log y a las estadísticas: el resumen debe coincidir con el log.
         const std::int64_t deliveredAt = _clock.nowMs();
         logEvent("orderDelivered", *order, deliveredAt, false);

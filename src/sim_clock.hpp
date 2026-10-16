@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <thread>
 
 // Reloj de la simulación.
 //
@@ -26,14 +25,27 @@ public:
         return static_cast<std::int64_t>(real.count() * _timeScale);
     }
 
-    // Deja pasar `simMs` milisegundos simulados (simMs / timeScale reales).
-    // Pausar solo representa tiempo simulado; nunca se usa para esperar a otro hilo.
-    void sleepSim(std::int64_t simMs) const
+    // Instante real en que el reloj marcará `simMs` (milisegundos simulados desde el inicio).
+    std::chrono::steady_clock::time_point realTimeAt(std::int64_t simMs) const
     {
-        std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(simMs / _timeScale));
+        return _start + toReal(simMs);
+    }
+
+    // Instante real dentro de `simMs` milisegundos simulados a partir de ahora.
+    std::chrono::steady_clock::time_point realTimeIn(std::int64_t simMs) const
+    {
+        return std::chrono::steady_clock::now() + toReal(simMs);
     }
 
 private:
+    // Duración real de `simMs` milisegundos simulados. Las esperas se hacen con estos instantes
+    // en Shutdown::sleepUntil, que se puede interrumpir (el reloj ya no duerme por sí mismo).
+    std::chrono::steady_clock::duration toReal(std::int64_t simMs) const
+    {
+        return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double, std::milli>(simMs / _timeScale));
+    }
+
     const double _timeScale;  // segundos simulados por segundo real
     const std::chrono::steady_clock::time_point _start;
 };

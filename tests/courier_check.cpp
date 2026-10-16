@@ -25,11 +25,12 @@ int main()
 {
     bool ok = true;
     const SimClock clock(kTimeScale);
+    const Shutdown shutdown;  // nunca se pide parar: la moto termina al cerrar su bandeja
 
     // 1. Una moto recibe pedidos mientras ya está corriendo.
     std::ostringstream out;
     EventLog log(out);
-    auto courier = std::make_shared<Courier>("c0", clock, log, kLegMs);
+    auto courier = std::make_shared<Courier>("c0", clock, log, shutdown, kLegMs);
     std::thread worker(&Courier::run, courier);  // el hilo guarda su copia del shared_ptr
 
     std::vector<std::int64_t> createdAt;
@@ -79,7 +80,7 @@ int main()
     // 2. Una moto sin pedidos termina cuando se cierra su bandeja (si no, el join se colgaría).
     std::ostringstream idleOut;
     EventLog idleLog(idleOut);
-    auto idle = std::make_shared<Courier>("c1", clock, idleLog, kLegMs);
+    auto idle = std::make_shared<Courier>("c1", clock, idleLog, shutdown, kLegMs);
     std::thread idleWorker(&Courier::run, idle);
     idle->inbox().close();
     idleWorker.join();

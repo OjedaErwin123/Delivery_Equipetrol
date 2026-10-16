@@ -1,8 +1,9 @@
 #include "simulation.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <random>
@@ -12,6 +13,7 @@
 #include "courier.hpp"
 #include "event_log.hpp"
 #include "order_book.hpp"
+#include "shutdown.hpp"
 #include "sim_clock.hpp"
 
 namespace {
@@ -25,15 +27,28 @@ std::int64_t nextIntervalMs(std::mt19937& rng, std::int64_t meanMs)
     return static_cast<std::int64_t>(-static_cast<double>(meanMs) * std::log(u));
 }
 
-// Hilo generador: crea los pedidos y los deja en el libro. Al terminar, cierra el libro.
-int generateOrders(const SimParams& p, const SimClock& clock, EventLog& log, OrderBook& book)
+// Hilo generador: crea los pedidos y los deja en el libro. Devuelve cuántos creó.
+// Cada pedido tiene su instante planificado (suma de intervalos) y se crea con ese t:
+// así ninguno queda con t >= durationS*1000 aunque el hilo despierte unos ms tarde.
+// Al llegar a `orders` cierra el libro (fin natural); si se cumple `durationS` o se pide
+// parar, solo deja de crear: el libro lo descarta quien ordena la detención.
+int generateOrders(const SimParams& p, const SimClock& clock, EventLog& log, OrderBook& book,
+                   const Shutdown& shutdown)
 {
     std::mt19937 rng(p.seed);  // propio de este hilo: nadie más lo usa
+    const std::int64_t endMs = p.durationS * 1000;
+    std::int64_t plannedMs = 0;
     for (int i = 0; i < p.orders; ++i) {
-        clock.sleepSim(nextIntervalMs(rng, p.meanIntervalMs));
+        plannedMs += nextIntervalMs(rng, p.meanIntervalMs);
+        if (p.durationS > 0 && plannedMs >= endMs) {
+            return i;  // el próximo pedido caería después del fin: no se crea
+        }
+        if (shutdown.sleepUntil(clock.realTimeAt(plannedMs))) {
+            return i;  // espera interrumpible: se pidió parar
+        }
         const std::string restaurant = "r" + std::to_string(rng() % p.restaurants);
         const std::string destination = "n" + std::to_string(rng() % p.nodes);
-        Order order("o" + std::to_string(i), restaurant, destination, clock.nowMs());
+        Order order("o" + std::to_string(i), restaurant, destination, plannedMs);
 
         Event e;  // se registra antes de soltar el pedido: ningún evento suyo puede adelantarse
         e.t = order.createdAtMs();
@@ -42,7 +57,10 @@ int generateOrders(const SimParams& p, const SimClock& clock, EventLog& log, Ord
         e.restaurant = restaurant;
         log.write(e);
         if (!book.submit(std::move(order))) {
-            throw std::logic_error("el libro solo lo cierra el generador, al final");
+            if (shutdown.requested()) {
+                return i + 1;  // ya creado y registrado: cuenta como pendiente
+            }
+            throw std::logic_error("el libro solo se cierra al final o al detener");
         }
     }
     book.close();
@@ -50,9 +68,11 @@ int generateOrders(const SimParams& p, const SimClock& clock, EventLog& log, Ord
 }
 
 // Hilo despachador (v0): reparte por turnos. Cuando el libro está cerrado y vacío,
-// cierra todas las bandejas para que cada moto termine al vaciar la suya.
+// cierra todas las bandejas para que cada moto termine al vaciar la suya. Si se detiene,
+// el libro abortado le devuelve std::nullopt y un pedido que ya no entra a una bandeja
+// abortada queda pendiente.
 void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
-                        const std::vector<std::shared_ptr<Courier>>& couriers)
+                        const std::vector<std::shared_ptr<Courier>>& couriers, const Shutdown& shutdown)
 {
     std::size_t next = 0;
     while (std::optional<Order> order = book.take()) {
@@ -66,7 +86,10 @@ void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
         e.courier = courier.id();
         log.write(e);
         if (!courier.inbox().submit(std::move(*order))) {
-            throw std::logic_error("las bandejas solo las cierra el despachador, al final");
+            if (shutdown.requested()) {
+                break;
+            }
+            throw std::logic_error("las bandejas solo se cierran al final o al detener");
         }
     }
     for (const auto& courier : couriers) {
@@ -80,27 +103,69 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
 {
     EventLog log(logOut);
     OrderBook book;
+    Shutdown shutdown;
     const SimClock clock(p.timeScale);  // t = 0
+
+    // Hilos que siguen corriendo. Es UN valor que todos tocan: atomic, y fetch_sub (RMW)
+    // para que dos hilos que terminan a la vez no pierdan un descuento (lost update).
+    std::atomic<int> running(p.couriers + 2);
 
     // Cada moto la comparten su hilo y el despachador: shared_ptr garantiza que vive
     // mientras alguno la use.
     std::vector<std::shared_ptr<Courier>> couriers;
     for (int i = 0; i < p.couriers; ++i) {
-        couriers.push_back(std::make_shared<Courier>("c" + std::to_string(i), clock, log, p.legMs));
+        couriers.push_back(std::make_shared<Courier>("c" + std::to_string(i), clock, log, shutdown, p.legMs));
     }
     std::vector<std::thread> courierThreads;
     courierThreads.reserve(couriers.size());
     for (const auto& courier : couriers) {
-        courierThreads.emplace_back(&Courier::run, courier);  // el hilo guarda su copia del shared_ptr
+        // La lambda captura el shared_ptr por valor: el hilo tiene su propia copia.
+        courierThreads.emplace_back([courier, &running] {
+            courier->run();
+            running.fetch_sub(1);
+        });
     }
-    // std::thread copia sus argumentos: std::ref/std::cref hacen que el despachador use
-    // el libro, el registro, el reloj y las motos reales, que viven hasta después del join.
-    std::thread dispatcher(dispatchRoundRobin, std::cref(clock), std::ref(log), std::ref(book), std::cref(couriers));
+    std::thread dispatcher([&clock, &log, &book, &couriers, &shutdown, &running] {
+        dispatchRoundRobin(clock, log, book, couriers, shutdown);
+        running.fetch_sub(1);
+    });
 
     out << "Simulation has started...\n" << std::flush;
 
     int created = 0;  // solo lo escribe el generador; se lee después del join
-    std::thread generator([&p, &clock, &log, &book, &created] { created = generateOrders(p, clock, log, book); });
+    std::thread generator([&p, &clock, &log, &book, &shutdown, &created, &running] {
+        created = generateOrders(p, clock, log, book, shutdown);
+        running.fetch_sub(1);
+    });
+
+    // Bucle de frames (~30 por segundo): no es espera activa, el hilo duerme entre frames y
+    // casi no usa CPU. El enunciado permite pausar para regular los FPS de la ventana: aquí
+    // irá el dibujado, y la bandera de la señal (SIGINT/SIGTERM) se revisará aquí mismo.
+    const std::int64_t endMs = p.durationS * 1000;
+    bool stopped = false;
+    while (running.load() > 0) {
+        if (p.durationS > 0 && clock.nowMs() >= endMs) {
+            stopped = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(33));
+    }
+
+    if (stopped) {
+        // t = durationS*1000: el instante en que vence la duración, no el del frame que lo notó.
+        Event e;
+        e.t = endMs;
+        e.event = "simulationStopping";
+        log.write(e);
+        // Primero la orden (despierta a quien duerme en un tramo o esperando el próximo
+        // pedido), luego descartar lo que espera en el libro y en las bandejas: todo eso
+        // queda pendiente, y cada take() bloqueado devuelve std::nullopt.
+        shutdown.request();
+        book.abort();
+        for (const auto& courier : couriers) {
+            courier->inbox().abort();
+        }
+    }
 
     generator.join();
     dispatcher.join();

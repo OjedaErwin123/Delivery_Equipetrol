@@ -5,6 +5,7 @@
 
 #include "event_log.hpp"
 #include "order_book.hpp"
+#include "shutdown.hpp"
 #include "sim_clock.hpp"
 
 // Una moto. Su método run() corre en su propio hilo:
@@ -13,11 +14,12 @@
 //
 // Recibe pedidos en su bandeja (un OrderBook: FIFO, segura entre hilos y con cierre)
 // y los entrega uno a uno. Sin pedidos, duerme en take() sin consumir CPU; termina
-// cuando le cierran la bandeja y la vacía.
+// cuando le cierran la bandeja y la vacía. Los viajes se pueden interrumpir: si se pide
+// parar a mitad de un tramo, abandona el pedido (queda pendiente) y termina.
 class Courier {
 public:
-    // `clock` y `log` los crea quien crea las motos y viven hasta después del join.
-    Courier(std::string id, const SimClock& clock, EventLog& log, std::int64_t legMs);
+    // `clock`, `log` y `shutdown` los crea quien crea las motos y viven hasta después del join.
+    Courier(std::string id, const SimClock& clock, EventLog& log, const Shutdown& shutdown, std::int64_t legMs);
     Courier(const Courier&) = delete;
     Courier& operator=(const Courier&) = delete;
 
@@ -37,6 +39,7 @@ private:
     const std::string _id;
     const SimClock& _clock;
     EventLog& _log;
+    const Shutdown& _shutdown;
     const std::int64_t _legMs;  // duración simulada de cada tramo de viaje (v0: fija)
     OrderBook _inbox;
 
