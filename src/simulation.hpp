@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <ostream>
 #include <string>
@@ -35,6 +36,11 @@ struct Summary {
 // eventos en `logOut`, y vuelve recién cuando todos los hilos terminaron (join).
 // Si se cumple `durationS`, registra simulationStopping, detiene todos los hilos y lo que
 // no se entregó queda pendiente (pending = created - delivered en el resumen).
+// Lo mismo si `stopSignal` se pone en true (lo pone el handler de SIGINT/SIGTERM).
+Summary runSimulation(const SimParams& params, std::ostream& logOut, std::ostream& out,
+                      const std::atomic<bool>& stopSignal);
+
+// Sin señal: solo termina por tiempo o al entregar todos los pedidos (lo usan las pruebas).
 Summary runSimulation(const SimParams& params, std::ostream& logOut, std::ostream& out);
 
 // El resumen como una línea JSON, con el formato del enunciado.
