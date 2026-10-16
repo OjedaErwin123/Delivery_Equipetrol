@@ -46,7 +46,7 @@ int main()
         for (int i = 0; i < kOrders; ++i) {
             Order order("o" + std::to_string(i), "r" + std::to_string(i % 6), "n" + std::to_string(i % 25), i);
             // Si se acepta, el pedido pasa al libro y 'order' queda vacío; si no, sigue aquí.
-            if (!book.submit(std::move(order))) {
+            if (book.submit(std::move(order)) != OrderBook::Submit::accepted) {
                 ++refused;
             }
         }
@@ -74,10 +74,31 @@ int main()
         exactlyOnce = all[i] == static_cast<int>(i);
     }
 
-    const bool ok = refused == 0 && exactlyOnce && fifo && book.size() == 0;
+    bool ok = refused == 0 && exactlyOnce && fifo && book.size() == 0;
     std::cout << "rechazados por libro cerrado: " << refused << "\n"
               << "exactamente una vez: " << (exactlyOnce ? "OK" : "FALLA") << "\n"
               << "orden FIFO: " << (fifo ? "OK" : "FALLA") << "\n"
               << "libro vacío al final: " << (book.size() == 0 ? "OK" : "FALLA") << "\n";
+
+    // Verificación 3: con límite (maxPending), lleno rechaza sin consumir el pedido; al sacar
+    // uno vuelve a aceptar; con 0 no acepta nada; cerrado gana a lleno.
+    OrderBook limited(2);
+    Order a("a", "r0", "n0", 0), b("b", "r0", "n0", 0), c("c", "r0", "n0", 0);
+    const bool firstTwo = limited.submit(std::move(a)) == OrderBook::Submit::accepted &&
+                          limited.submit(std::move(b)) == OrderBook::Submit::accepted;
+    const bool thirdFull = limited.submit(std::move(c)) == OrderBook::Submit::full;
+    const bool notConsumed = c.id() == "c";  // submit no lo movió: sigue en manos de quien llamó
+    const bool takenFirst = limited.take()->id() == "a";
+    const bool acceptsAgain = limited.submit(std::move(c)) == OrderBook::Submit::accepted && limited.size() == 2;
+    OrderBook zero(0);
+    Order d("d", "r0", "n0", 0);
+    const bool zeroFull = zero.submit(std::move(d)) == OrderBook::Submit::full && zero.size() == 0;
+    limited.close();
+    Order e("e", "r0", "n0", 0);
+    const bool closedWins = limited.submit(std::move(e)) == OrderBook::Submit::closed;
+    const bool capacityOk = firstTwo && thirdFull && notConsumed && takenFirst && acceptsAgain && zeroFull && closedWins;
+    std::cout << "límite: lleno rechaza sin consumir, vuelve a aceptar, 0 no acepta nada, cerrado gana: "
+              << (capacityOk ? "OK" : "FALLA") << "\n";
+    ok = ok && capacityOk;
     return ok ? 0 : 1;
 }

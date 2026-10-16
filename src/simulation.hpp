@@ -1,7 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <utility>
@@ -26,7 +28,9 @@ struct SimParams {
     int orders = 0;                       // tope de pedidos creados; 0 = sin tope (hasta la detención)
     std::vector<std::string> restaurants = numberedIds("r", 7);  // de dónde salen los pedidos
     std::vector<std::string> destinations = numberedIds("n", 154);  // puntos de entrega posibles
-    std::int64_t meanIntervalMs = 36000;  // tiempo simulado medio entre pedidos
+    std::int64_t meanIntervalMs = 36000;  // tiempo simulado medio entre dos pedidos (con ráfagas también)
+    int burstMax = 1;                     // cada llegada trae entre 1 y burstMax pedidos en el mismo instante
+    std::optional<std::size_t> maxPending;  // límite del libro (queueFull); sin valor, sin límite
     std::int64_t legMs = 60000;           // duración simulada de cada tramo de viaje (v0: fija)
     double timeScale = 60.0;              // segundos simulados por segundo real
     std::uint32_t seed = 42;
@@ -34,16 +38,17 @@ struct SimParams {
 };
 
 // Los parámetros que salen del archivo de configuración (ya validado): motos, semilla,
-// intervalo medio, duración y escala de tiempo, los restaurantes, y como destinos todos los
-// nodos que no son de un restaurante. Sin tope de pedidos: se crean hasta la detención.
+// intervalo medio, ráfagas, límite del libro, duración y escala de tiempo, los restaurantes,
+// y como destinos todos los nodos que no son de un restaurante. Sin tope de pedidos: se crean hasta la detención.
 // Los tramos siguen siendo fijos (legMs) hasta que las motos se muevan por el grafo.
 SimParams paramsFromConfig(const Config& config);
 
 // Resumen final (sección 6.3). Los campos que esta versión todavía no produce
-// (rechazados, reasignados, averías) se imprimen en 0.
+// (reasignados, averías) se imprimen en 0. pending = created - delivered - rejected.
 struct Summary {
     int created = 0;
     int delivered = 0;
+    int rejected = 0;
     std::int64_t avgDeliveryMs = 0;  // de la creación a la entrega
     std::int64_t maxDeliveryMs = 0;
     std::vector<std::pair<std::string, int>> deliveredPerCourier;

@@ -22,54 +22,93 @@ namespace {
 // Intervalo exponencial con media `meanMs`, calculado directo del mt19937: las
 // distribuciones de la std dan valores distintos en libstdc++ y libc++, y la
 // secuencia de pedidos debe ser la misma para una semilla con cualquier compilador.
-std::int64_t nextIntervalMs(std::mt19937& rng, std::int64_t meanMs)
+std::int64_t nextIntervalMs(std::mt19937& rng, double meanMs)
 {
     const double u = (static_cast<double>(rng()) + 0.5) / 4294967296.0;  // (0, 1)
-    return static_cast<std::int64_t>(-static_cast<double>(meanMs) * std::log(u));
+    return static_cast<std::int64_t>(-meanMs * std::log(u));
 }
 
-// Hilo generador: crea los pedidos y los deja en el libro. Devuelve cuántos creó.
-// Cada pedido tiene su instante planificado (suma de intervalos) y se crea con ese t:
-// así ninguno queda con t >= durationS*1000 aunque el hilo despierte unos ms tarde.
+struct Generated {
+    int created = 0;
+    int rejected = 0;
+};
+
+// Registra un evento de pedido (orderCreated u orderRejected) salvo que la simulación ya haya
+// terminado: comprobar y registrar en una sola operación (ver Shutdown::unlessStopped).
+bool logOrderEvent(EventLog& log, const Shutdown& shutdown, const char* event, const Order& order,
+                   const char* reason)
+{
+    Event e;
+    e.t = order.createdAtMs();
+    e.event = event;
+    e.order = order.id();
+    if (reason == nullptr) {
+        e.restaurant = order.restaurant();
+    } else {
+        e.reason = reason;
+    }
+    return shutdown.unlessStopped(e.t, [&log, &e] { log.write(e); });
+}
+
+// Hilo generador: crea los pedidos y los deja en el libro. Devuelve cuántos creó y cuántos
+// rechazó. Cada LLEGADA trae entre 1 y burstMax pedidos en el mismo instante (una ráfaga), y
+// las llegadas se separan en promedio meanIntervalMs * (1 + burstMax) / 2: así el tiempo medio
+// entre dos pedidos sigue siendo meanIntervalMs, como dice la configuración. Cada pedido de la
+// ráfaga elige su restaurante y su destino al azar, independiente de los demás.
+// Cada llegada tiene su instante planificado (suma de intervalos) y sus pedidos se crean con
+// ese t: así ninguno queda con t >= durationS*1000 aunque el hilo despierte unos ms tarde.
 // Si hay tope (`orders` > 0), al llegar a él cierra el libro (fin natural); si se cumple
 // `durationS` o se pide parar, solo deja de crear: el libro lo descarta quien ordena la detención.
-int generateOrders(const SimParams& p, const SimClock& clock, EventLog& log, OrderBook& book,
-                   const Shutdown& shutdown)
+Generated generateOrders(const SimParams& p, const SimClock& clock, EventLog& log, OrderBook& book,
+                         const Shutdown& shutdown)
 {
     std::mt19937 rng(p.seed);  // propio de este hilo: nadie más lo usa
+    const double meanArrivalMs = static_cast<double>(p.meanIntervalMs) * (1.0 + p.burstMax) / 2.0;
     const std::int64_t endMs = p.durationS * 1000;
     std::int64_t plannedMs = 0;
-    for (int i = 0; p.orders == 0 || i < p.orders; ++i) {
-        plannedMs += nextIntervalMs(rng, p.meanIntervalMs);
+    Generated g;
+    for (;;) {
+        plannedMs += nextIntervalMs(rng, meanArrivalMs);
         if (p.durationS > 0 && plannedMs >= endMs) {
-            return i;  // el próximo pedido caería después del fin: no se crea
+            return g;  // la próxima llegada caería después del fin: no se crea
         }
         if (shutdown.sleepUntil(clock.realTimeAt(plannedMs))) {
-            return i;  // espera interrumpible: se pidió parar
+            return g;  // espera interrumpible: se pidió parar
         }
-        const std::string& restaurant = p.restaurants[rng() % p.restaurants.size()];
-        const std::string& destination = p.destinations[rng() % p.destinations.size()];
-        Order order("o" + std::to_string(i), restaurant, destination, plannedMs);
+        const int burst = 1 + static_cast<int>(rng() % static_cast<std::uint32_t>(p.burstMax));
+        for (int k = 0; k < burst; ++k) {
+            const std::string& restaurant = p.restaurants[rng() % p.restaurants.size()];
+            const std::string& destination = p.destinations[rng() % p.destinations.size()];
+            Order order("o" + std::to_string(g.created), restaurant, destination, plannedMs);
 
-        Event e;  // se registra antes de soltar el pedido: ningún evento suyo puede adelantarse
-        e.t = order.createdAtMs();
-        e.event = "orderCreated";
-        e.order = order.id();
-        e.restaurant = restaurant;
-        // Comprobar y registrar en una sola operación: si no, se podría pedir parar entre
-        // las dos y este orderCreated quedaría en el log después de simulationStopping.
-        if (!shutdown.unlessStopped(e.t, [&log, &e] { log.write(e); })) {
-            return i;
-        }
-        if (!book.submit(std::move(order))) {
-            if (shutdown.requested()) {
-                return i + 1;  // ya creado y registrado: cuenta como pendiente
+            // Se registra antes de soltar el pedido: ningún evento suyo puede adelantarse.
+            if (!logOrderEvent(log, shutdown, "orderCreated", order, nullptr)) {
+                return g;
             }
-            throw std::logic_error("el libro solo se cierra al final o al detener");
+            ++g.created;
+            switch (book.submit(std::move(order))) {
+            case OrderBook::Submit::accepted:
+                break;
+            case OrderBook::Submit::full:
+                // El libro tiene maxPending esperando: rechazado en el mismo instante. El pedido no
+                // entró al libro (submit no lo consumió); si ya se detuvo, queda pendiente.
+                if (!logOrderEvent(log, shutdown, "orderRejected", order, "queueFull")) {
+                    return g;
+                }
+                ++g.rejected;
+                break;
+            case OrderBook::Submit::closed:
+                if (shutdown.requested()) {
+                    return g;  // ya creado y registrado: cuenta como pendiente
+                }
+                throw std::logic_error("el libro solo se cierra al final o al detener");
+            }
+            if (p.orders > 0 && g.created == p.orders) {
+                book.close();  // tope de las pruebas: no llegarán más
+                return g;
+            }
         }
     }
-    book.close();
-    return p.orders;
 }
 
 // Hilo despachador (v0): reparte por turnos. Cuando el libro está cerrado y vacío,
@@ -92,11 +131,11 @@ void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
         if (!shutdown.unlessStopped(e.t, [&log, &e] { log.write(e); })) {
             break;  // se detuvo (o su t ya pasó el fin): el pedido queda pendiente
         }
-        if (!courier.inbox().submit(std::move(*order))) {
+        if (courier.inbox().submit(std::move(*order)) != OrderBook::Submit::accepted) {
             if (shutdown.requested()) {
-                break;
+                break;  // bandeja abortada: el pedido queda pendiente
             }
-            throw std::logic_error("las bandejas solo se cierran al final o al detener");
+            throw std::logic_error("las bandejas no tienen límite y solo se cierran al final o al detener");
         }
     }
     for (const auto& courier : couriers) {
@@ -112,6 +151,8 @@ SimParams paramsFromConfig(const Config& c)
     p.couriers = static_cast<int>(c.couriers);
     p.orders = 0;  // los pedidos se crean de forma continua durante toda la ejecución
     p.meanIntervalMs = c.meanIntervalMs;
+    p.burstMax = static_cast<int>(c.burstMax);
+    p.maxPending = static_cast<std::size_t>(c.maxPending);  // validado >= 0; 0 rechaza todo
     p.timeScale = c.timeScale;
     p.seed = static_cast<std::uint32_t>(c.seed);
     p.durationS = c.durationS;
@@ -150,7 +191,7 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
 Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& out, const std::atomic<bool>& stopSignal)
 {
     EventLog log(logOut);
-    OrderBook book;
+    OrderBook book(p.maxPending);
     const std::int64_t endMs = p.durationS * 1000;
     Shutdown shutdown(endMs);  // niega todo evento con t >= endMs: nada queda registrado después del fin
     const SimClock clock(p.timeScale);  // t = 0
@@ -181,9 +222,9 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
 
     out << "Simulation has started...\n" << std::flush;
 
-    int created = 0;  // solo lo escribe el generador; se lee después del join
-    std::thread generator([&p, &clock, &log, &book, &shutdown, &created, &running] {
-        created = generateOrders(p, clock, log, book, shutdown);
+    Generated generated;  // solo lo escribe el generador; se lee después del join
+    std::thread generator([&p, &clock, &log, &book, &shutdown, &generated, &running] {
+        generated = generateOrders(p, clock, log, book, shutdown);
         running.fetch_sub(1);
     });
 
@@ -250,7 +291,8 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
 
     // Después de los join: cada moto contó sus entregas sola; aquí se suman una vez.
     Summary s;
-    s.created = created;
+    s.created = generated.created;
+    s.rejected = generated.rejected;
     std::int64_t total = 0;
     for (const auto& courier : couriers) {
         s.delivered += courier->delivered();
@@ -266,7 +308,8 @@ std::string toJson(const Summary& s)
 {
     std::string json = "{\"created\": " + std::to_string(s.created) +
                        ", \"delivered\": " + std::to_string(s.delivered) +
-                       ", \"rejected\": 0, \"pending\": " + std::to_string(s.created - s.delivered) +
+                       ", \"rejected\": " + std::to_string(s.rejected) +
+                       ", \"pending\": " + std::to_string(s.created - s.delivered - s.rejected) +
                        ", \"reassigned\": 0, \"breakdowns\": 0, \"avgDeliveryMs\": " + std::to_string(s.avgDeliveryMs) +
                        ", \"maxDeliveryMs\": " + std::to_string(s.maxDeliveryMs) + ", \"deliveredPerCourier\": {";
     for (std::size_t i = 0; i < s.deliveredPerCourier.size(); ++i) {

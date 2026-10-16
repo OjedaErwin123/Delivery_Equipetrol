@@ -2,17 +2,20 @@
 
 #include <utility>
 
-bool OrderBook::submit(Order&& order)
+OrderBook::Submit OrderBook::submit(Order&& order)
 {
     {
         std::lock_guard<std::mutex> lock(_mutex);
         if (_closed) {
-            return false;
+            return Submit::closed;
+        }
+        if (_capacity && _orders.size() >= *_capacity) {
+            return Submit::full;
         }
         _orders.push_back(std::move(order));
     }
     _ready.notify_one();
-    return true;
+    return Submit::accepted;
 }
 
 std::optional<Order> OrderBook::take()
