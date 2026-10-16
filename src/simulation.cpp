@@ -55,7 +55,11 @@ int generateOrders(const SimParams& p, const SimClock& clock, EventLog& log, Ord
         e.event = "orderCreated";
         e.order = order.id();
         e.restaurant = restaurant;
-        log.write(e);
+        // Comprobar y registrar en una sola operación: si no, se podría pedir parar entre
+        // las dos y este orderCreated quedaría en el log después de simulationStopping.
+        if (!shutdown.unlessStopped([&log, &e] { log.write(e); })) {
+            return i;
+        }
         if (!book.submit(std::move(order))) {
             if (shutdown.requested()) {
                 return i + 1;  // ya creado y registrado: cuenta como pendiente
@@ -156,11 +160,11 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         Event e;
         e.t = endMs;
         e.event = "simulationStopping";
-        log.write(e);
-        // Primero la orden (despierta a quien duerme en un tramo o esperando el próximo
-        // pedido), luego descartar lo que espera en el libro y en las bandejas: todo eso
-        // queda pendiente, y cada take() bloqueado devuelve std::nullopt.
-        shutdown.request();
+        // Pedir parar y registrarlo en una sola operación: ningún orderCreated puede quedar
+        // después en el log. La orden despierta a quien duerme en un tramo o esperando el
+        // próximo pedido; luego se descarta lo que espera en el libro y en las bandejas:
+        // todo eso queda pendiente, y cada take() bloqueado devuelve std::nullopt.
+        shutdown.request([&log, &e] { log.write(e); });
         book.abort();
         for (const auto& courier : couriers) {
             courier->inbox().abort();
