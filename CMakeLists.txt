@@ -114,6 +114,11 @@ delivery_target_options(config_check)
 target_link_libraries(config_check PRIVATE nlohmann_json)
 add_test(NAME config_check COMMAND config_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
 
+add_executable(road_graph_check tests/road_graph_check.cpp src/road_graph.cpp src/config.cpp)
+delivery_target_options(road_graph_check)
+target_link_libraries(road_graph_check PRIVATE nlohmann_json)
+add_test(NAME road_graph_check COMMAND road_graph_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
+
 if(ENABLE_TSAN)
   message(STATUS "ThreadSanitizer: activado")
 endif()
