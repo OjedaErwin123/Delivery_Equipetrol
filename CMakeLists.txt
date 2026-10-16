@@ -77,6 +77,7 @@ endfunction()
 add_executable(delivery_sim
   src/main.cpp
   src/simulation.cpp
+  src/stop_signal.cpp
   src/courier.cpp
   src/order_book.cpp
   src/event_log.cpp
@@ -112,6 +113,11 @@ add_test(NAME json_check COMMAND json_check)
 add_executable(stop_check tests/stop_check.cpp src/simulation.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(stop_check)
 add_test(NAME stop_check COMMAND stop_check)
+
+add_executable(signal_check tests/signal_check.cpp src/stop_signal.cpp src/simulation.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
+delivery_target_options(signal_check)
+add_test(NAME signal_check_int COMMAND signal_check INT)
+add_test(NAME signal_check_term COMMAND signal_check TERM)
 
 add_executable(config_check tests/config_check.cpp src/config.cpp)
 delivery_target_options(config_check)

@@ -107,6 +107,12 @@ void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
 
 Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& out)
 {
+    const std::atomic<bool> neverSignalled(false);
+    return runSimulation(p, logOut, out, neverSignalled);
+}
+
+Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& out, const std::atomic<bool>& stopSignal)
+{
     EventLog log(logOut);
     OrderBook book;
     const std::int64_t endMs = p.durationS * 1000;
@@ -147,7 +153,8 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
 
     // Bucle de frames (~30 por segundo): no es espera activa, el hilo duerme entre frames y
     // casi no usa CPU. El enunciado permite pausar para regular los FPS de la ventana: aquí
-    // irá el dibujado, y la bandera de la señal (SIGINT/SIGTERM) se revisará aquí mismo.
+    // irá el dibujado. En cada frame lee la bandera de la señal (SIGINT/SIGTERM): el handler
+    // no puede despertar a nadie, así que alguien que ya despierta seguido la tiene que mirar.
     // Duerme hasta el próximo frame o hasta el fin, lo que llegue antes: el fin se detecta
     // a tiempo y no hasta un frame tarde. Se compara en tiempo real (sleep_until garantiza
     // despertar en o después de `endReal`), así no hay que reintentar por redondeos.
@@ -156,10 +163,15 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
     // saldría sin registrar simulationStopping.
     const auto endReal = clock.realTimeAt(endMs);
     bool stopped = false;
+    bool bySignal = false;
     for (;;) {
         const auto now = std::chrono::steady_clock::now();
         if (p.durationS > 0 && now >= endReal) {
             stopped = true;
+            break;
+        }
+        if (stopSignal.load()) {
+            stopped = bySignal = true;
             break;
         }
         if (running.load() == 0) {
@@ -170,15 +182,24 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
     }
 
     if (stopped) {
-        // t = durationS*1000: el instante en que vence la duración, no el del frame que lo notó.
+        // Por tiempo, t = durationS*1000: el instante en que vence la duración. Por señal, la
+        // hora del frame que la vio (leer el reloj en el handler no es seguro), leída DENTRO de
+        // la sección crítica y nunca menor que el último t registrado (un pedido se crea con su
+        // instante planificado, que puede ir 1 ms adelante del reloj). Sin pasar del fin, por si
+        // la señal llega justo en el borde.
         Event e;
-        e.t = endMs;
         e.event = "simulationStopping";
         // Pedir parar y registrarlo en una sola operación: ningún evento puede quedar después
-        // en el log (todos pasan por unlessStopped). La orden despierta a quien duerme en un tramo o esperando el
-        // próximo pedido; luego se descarta lo que espera en el libro y en las bandejas:
-        // todo eso queda pendiente, y cada take() bloqueado devuelve std::nullopt.
-        shutdown.request([&log, &e] { log.write(e); });
+        // en el log (todos pasan por unlessStopped). La orden despierta a quien duerme en un
+        // tramo o esperando el próximo pedido; luego se descarta lo que espera en el libro y
+        // en las bandejas: todo eso queda pendiente, y cada take() bloqueado devuelve std::nullopt.
+        shutdown.request([&](std::int64_t latestT) {
+            e.t = bySignal ? std::max(clock.nowMs(), latestT) : endMs;
+            if (p.durationS > 0) {
+                e.t = std::min(e.t, endMs);
+            }
+            log.write(e);
+        });
         book.abort();
         for (const auto& courier : couriers) {
             courier->inbox().abort();

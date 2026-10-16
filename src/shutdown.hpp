@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -24,21 +25,17 @@ public:
     explicit Shutdown(std::int64_t endMs = 0) : _endMs(endMs) {}
 
     // Pide parar, corre `action` en la misma sección crítica (p. ej. registrar
-    // simulationStopping) y despierta a todos los que duermen.
+    // simulationStopping) y despierta a todos los que duermen. `action` recibe el mayor t
+    // registrado hasta ahora: el evento final puede llevar un t que ninguno anterior supere.
     template <typename Action>
     void request(Action action)
     {
         {
             std::lock_guard<std::mutex> lock(_mutex);
             _requested = true;
-            action();
+            action(_latestT);
         }
         _cv.notify_all();
-    }
-
-    void request()
-    {
-        request([] {});
     }
 
     // Corre `action` (registrar un evento con tiempo `t`) solo si todavía no se pidió parar
@@ -52,6 +49,7 @@ public:
             return false;
         }
         action();
+        _latestT = std::max(_latestT, t);
         return true;
     }
 
@@ -74,4 +72,5 @@ private:
     mutable std::condition_variable _cv;
     const std::int64_t _endMs;
     bool _requested = false;
+    mutable std::int64_t _latestT = 0;  // mayor t registrado con unlessStopped; con _mutex tomado
 };
