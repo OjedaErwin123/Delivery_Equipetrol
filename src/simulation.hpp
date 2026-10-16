@@ -7,20 +7,37 @@
 #include <utility>
 #include <vector>
 
-// Parámetros de la simulación. En esta versión van fijos en el código; más adelante
-// salen del archivo de configuración. Con estos valores la corrida simula ~1,5 h
-// (~90 s reales): 4 motos atienden 1 pedido cada 30 s simulados y llega 1 cada 36 s.
+#include "config.hpp"
+
+// Ids "r0", "r1", ... (o "n0", ...): los valores por defecto de las pruebas.
+inline std::vector<std::string> numberedIds(const std::string& prefix, int count)
+{
+    std::vector<std::string> ids;
+    for (int i = 0; i < count; ++i) {
+        ids.push_back(prefix + std::to_string(i));
+    }
+    return ids;
+}
+
+// Parámetros de la simulación. delivery_sim los arma desde el archivo de configuración
+// (paramsFromConfig); las pruebas usan estos valores por defecto y cambian lo que necesitan.
 struct SimParams {
     int couriers = 4;
-    int orders = 150;
-    int restaurants = 7;
-    int nodes = 154;
+    int orders = 0;                       // tope de pedidos creados; 0 = sin tope (hasta la detención)
+    std::vector<std::string> restaurants = numberedIds("r", 7);  // de dónde salen los pedidos
+    std::vector<std::string> destinations = numberedIds("n", 154);  // puntos de entrega posibles
     std::int64_t meanIntervalMs = 36000;  // tiempo simulado medio entre pedidos
-    std::int64_t legMs = 60000;           // duración simulada de cada tramo de viaje
+    std::int64_t legMs = 60000;           // duración simulada de cada tramo de viaje (v0: fija)
     double timeScale = 60.0;              // segundos simulados por segundo real
     std::uint32_t seed = 42;
-    std::int64_t durationS = 0;           // fin por tiempo simulado; 0 = sin límite (termina al entregar `orders`)
+    std::int64_t durationS = 0;           // fin por tiempo simulado; 0 = hasta una señal (o hasta `orders`)
 };
+
+// Los parámetros que salen del archivo de configuración (ya validado): motos, semilla,
+// intervalo medio, duración y escala de tiempo, los restaurantes, y como destinos todos los
+// nodos que no son de un restaurante. Sin tope de pedidos: se crean hasta la detención.
+// Los tramos siguen siendo fijos (legMs) hasta que las motos se muevan por el grafo.
+SimParams paramsFromConfig(const Config& config);
 
 // Resumen final (sección 6.3). Los campos que esta versión todavía no produce
 // (rechazados, reasignados, averías) se imprimen en 0.

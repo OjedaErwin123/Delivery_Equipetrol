@@ -76,6 +76,8 @@ endfunction()
 # --- Target principal (nombre obligatorio: delivery_sim) ---
 add_executable(delivery_sim
   src/main.cpp
+  src/cli.cpp
+  src/config.cpp
   src/simulation.cpp
   src/stop_signal.cpp
   src/courier.cpp
@@ -85,7 +87,7 @@ add_executable(delivery_sim
 delivery_target_options(delivery_sim)
 # SYSTEM: los warnings de los headers de OpenCV no cuentan como nuestros.
 target_include_directories(delivery_sim SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(delivery_sim PRIVATE ${OpenCV_LIBS})
+target_link_libraries(delivery_sim PRIVATE ${OpenCV_LIBS} nlohmann_json)
 
 # --- Pruebas: se compilan con `make` y se ejecutan con `ctest` ---
 enable_testing()
@@ -132,6 +134,20 @@ add_executable(road_graph_check tests/road_graph_check.cpp src/road_graph.cpp sr
 delivery_target_options(road_graph_check)
 target_link_libraries(road_graph_check PRIVATE nlohmann_json)
 add_test(NAME road_graph_check COMMAND road_graph_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
+
+add_executable(cli_check tests/cli_check.cpp src/cli.cpp src/config.cpp src/simulation.cpp src/courier.cpp
+               src/order_book.cpp src/event_log.cpp)
+delivery_target_options(cli_check)
+target_link_libraries(cli_check PRIVATE nlohmann_json)
+add_test(NAME cli_check COMMAND cli_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
+
+# delivery_sim con entrada inválida: debe salir con código distinto de cero (WILL_FAIL) sin simular.
+add_test(NAME delivery_sim_sin_argumentos COMMAND delivery_sim)
+add_test(NAME delivery_sim_archivo_inexistente COMMAND delivery_sim no-existe.json)
+add_test(NAME delivery_sim_bandera_desconocida COMMAND delivery_sim ${CMAKE_SOURCE_DIR}/config/equipetrol.json --lgo x.log)
+add_test(NAME delivery_sim_log_sin_ruta COMMAND delivery_sim ${CMAKE_SOURCE_DIR}/config/equipetrol.json --log)
+set_tests_properties(delivery_sim_sin_argumentos delivery_sim_archivo_inexistente delivery_sim_bandera_desconocida
+                     delivery_sim_log_sin_ruta PROPERTIES WILL_FAIL TRUE)
 
 if(ENABLE_TSAN)
   message(STATUS "ThreadSanitizer: activado")
