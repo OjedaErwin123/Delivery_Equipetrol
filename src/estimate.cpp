@@ -8,14 +8,15 @@
 
 namespace {
 
-// Cuánto tarda el camino mínimo de `from` a `to` (igual que un Trip: metros / velocidad, hacia arriba).
-std::int64_t legMs(const World& world, std::size_t from, std::size_t to)
+// Cuánto tarda el recorrido más corto de `from` (un nodo o un punto de una calle) a `to`, igual que
+// un Trip: metros / velocidad, hacia arriba.
+std::int64_t legMs(const World& world, const Place& from, std::size_t to)
 {
-    const std::optional<RoadGraph::Path> path = world.graph.shortestPath(from, to);
-    if (!path) {
-        throw EstimateError("sin camino de " + world.graph.nodeId(from) + " a " + world.graph.nodeId(to));
+    const std::optional<Route> route = routeTo(world.graph, from, to);
+    if (!route) {
+        throw EstimateError("sin camino de " + describe(world.graph, from) + " a " + world.graph.nodeId(to));
     }
-    return static_cast<std::int64_t>(std::ceil(path->meters / world.metersPerMs));
+    return static_cast<std::int64_t>(std::ceil(route->meters / world.metersPerMs));
 }
 
 std::size_t nodeOf(const World& world, const std::string& place, bool isRestaurant)
@@ -45,7 +46,7 @@ std::int64_t estimateDelivery(const World& world, const CourierPlan& plan, const
     const std::size_t target = bag.size() - 1;  // el pedido que se estima: el último en la fila FIFO
 
     // Desde el final del tramo actual: la moto no se desvía a mitad de una calle.
-    std::size_t node = plan.trip.to();
+    Place node = plan.trip.to();
     std::int64_t t = std::max(nowMs, plan.trip.arrivalMs());
 
     for (std::size_t next = 0; next < bag.size(); ++next) {
