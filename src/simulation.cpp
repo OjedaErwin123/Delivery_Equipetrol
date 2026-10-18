@@ -176,7 +176,7 @@ void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
         }
     }
     for (const auto& courier : couriers) {
-        courier->inbox().close();
+        courier->close();
     }
 }
 
@@ -266,7 +266,7 @@ int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log,
         }
     }
     for (const auto& courier : couriers) {
-        courier->inbox().close();
+        courier->close();
     }
     return noCourier;
 }
@@ -459,7 +459,7 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         book.abort();
         fleet->abort();  // el despachador puede estar esperando una moto con lugar
         for (const auto& courier : couriers) {
-            courier->inbox().abort();
+            courier->abort();
         }
         if (restaurants) {
             for (const auto& restaurant : *restaurants) {

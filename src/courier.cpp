@@ -11,7 +11,7 @@ Courier::Courier(std::string id, const SimClock& clock, EventLog& log, const Shu
                  double breakdownProbability, std::uint32_t seed)
     : _id(std::move(id)), _clock(clock), _log(log), _shutdown(shutdown), _legMs(legMs), _world(std::move(world)),
       _restaurants(std::move(restaurants)), _fleet(std::move(fleet)), _index(index),
-      _at(_world ? _world->startNode : 0), _plan(Trip::stay(_at, 0)),
+      _at(_world ? _world->startNode : 0), _trip(Trip::stay(_at, 0)),
       _breakdownProbability(breakdownProbability), _rng(seed)
 {
 }
@@ -26,44 +26,71 @@ void Courier::finished()
 Trip Courier::trip() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
-    return _plan.trip;
+    return _trip;
 }
 
 CourierPlan Courier::plan() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
-    return _plan;
+    CourierPlan plan(_trip);
+    for (const Carried& c : _bag) {
+        plan.orders.push_back({c.order.restaurant(), c.order.destination(), c.order.readyAtMs(), c.picked});
+    }
+    return plan;
 }
 
 OrderBook::Submit Courier::assign(Order&& order)
 {
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        _plan.orders.push_back({order.restaurant(), order.destination(), order.readyAtMs(), false});
+        if (_closed || _aborted) {
+            return OrderBook::Submit::closed;
+        }
+        _bag.push_back({std::move(order), false});
     }
-    return _inbox.submit(std::move(order));  // solo falla si se está deteniendo: el plan ya no importa
+    _work.notify_one();  // solo el hilo de la moto espera en _work
+    return OrderBook::Submit::accepted;
+}
+
+void Courier::close()
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _closed = true;
+    }
+    _work.notify_all();
+}
+
+void Courier::abort()
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _aborted = true;
+    }
+    _work.notify_all();
+}
+
+std::optional<Courier::Next> Courier::waitForWork()
+{
+    std::unique_lock<std::mutex> lock(_mutex);
+    // Predicado: despertares espurios, y el cierre o la detención (07).
+    _work.wait(lock, [this] { return _aborted || _closed || !_bag.empty(); });
+    if (_aborted || _bag.empty()) {
+        return std::nullopt;
+    }
+    const Carried& first = _bag.front();
+    return Next{first.order.id(), first.order.restaurant(), first.order.destination(), first.picked};
+}
+
+std::deque<Courier::Carried>::iterator Courier::find(const std::string& id)
+{
+    return std::find_if(_bag.begin(), _bag.end(), [&id](const Carried& c) { return c.order.id() == id; });
 }
 
 void Courier::publish(const Trip& trip)
 {
     std::lock_guard<std::mutex> lock(_mutex);
-    _plan.trip = trip;
-}
-
-void Courier::markPicked(std::size_t i)
-{
-    std::lock_guard<std::mutex> lock(_mutex);
-    if (i < _plan.orders.size()) {
-        _plan.orders[i].picked = true;
-    }
-}
-
-void Courier::dropFirst()
-{
-    std::lock_guard<std::mutex> lock(_mutex);
-    if (!_plan.orders.empty()) {
-        _plan.orders.erase(_plan.orders.begin());
-    }
+    _trip = trip;
 }
 
 Courier::Leg Courier::travel(const std::string& place, bool isRestaurant)
@@ -137,23 +164,13 @@ bool Courier::breakDown(const Trip& trip, std::int64_t at)
     return true;
 }
 
-void Courier::collect(std::deque<Carried>& bag)
+Courier::Leg Courier::pickUp(const std::string& restaurant)
 {
-    while (std::optional<Order> order = _inbox.tryTake()) {
-        bag.push_back({std::move(*order), false});
-    }
-}
-
-Courier::Leg Courier::pickUp(std::deque<Carried>& bag)
-{
-    const std::string restaurant = bag.front().order.restaurant();
     // Sin camino hasta el restaurante (moto atrapada, solo con mapas de evaluadores): noPath.
     const Leg leg = travel(restaurant, true);
     if (leg != Leg::arrived) {
         return leg;
     }
-    collect(bag);  // lo asignado mientras viajaba también se recoge en esta visita
-
     // Fila (ticket) hasta tomar un puesto; nullopt = se detuvo mientras esperaba. El Slot libera el
     // puesto al destruirse (RAII), en cualquier salida. (Slot es move-only sin asignación: el
     // optional se construye directamente con el resultado.)
@@ -162,89 +179,101 @@ Courier::Leg Courier::pickUp(std::deque<Carried>& bag)
     if (_restaurants && !slot) {
         return Leg::stopped;
     }
-    // Una sola visita: todos los pedidos de la mochila de este restaurante que falta recoger.
-    // Un evento negado (se pidió parar, o su t ya pasó el fin) corta: los pedidos quedan pendientes.
-    std::vector<std::size_t> here;
-    for (std::size_t i = 0; i < bag.size(); ++i) {
-        if (!bag[i].picked && bag[i].order.restaurant() == restaurant) {
-            here.push_back(i);
-        }
-    }
+    // Una sola visita: todos los pedidos de la mochila de este restaurante que falta recoger,
+    // también los asignados mientras viajaba o hacía fila. Un evento negado (se pidió parar, o su
+    // t ya pasó el fin) corta: los pedidos quedan pendientes.
+    std::vector<std::string> here;
     const std::int64_t startedAt = _clock.nowMs();
     std::int64_t readyAt = startedAt;
-    for (std::size_t i : here) {
-        if (!logEvent("pickupStarted", bag[i].order, startedAt, true)) {
-            return Leg::stopped;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        for (const Carried& c : _bag) {
+            if (!c.picked && c.order.restaurant() == restaurant) {
+                if (!logEvent("pickupStarted", c.order, startedAt, true)) {
+                    return Leg::stopped;
+                }
+                here.push_back(c.order.id());
+                readyAt = std::max(readyAt, c.order.readyAtMs());
+            }
         }
-        readyAt = std::max(readyAt, bag[i].order.readyAtMs());
     }
     // Con el puesto tomado: espera la comida del último si no está lista, y la entrega dura kHandoverMs.
     if (_restaurants && _shutdown.sleepUntil(_clock.realTimeAt(readyAt + kHandoverMs))) {
         return Leg::stopped;
     }
     const std::int64_t pickedAt = _clock.nowMs();
-    for (std::size_t i : here) {
-        if (!logEvent("orderPickedUp", bag[i].order, pickedAt, true)) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    for (const std::string& id : here) {
+        const auto it = find(id);  // sigue ahí: solo esta moto saca pedidos de su mochila
+        if (!logEvent("orderPickedUp", it->order, pickedAt, true)) {
             return Leg::stopped;
         }
-        bag[i].picked = true;
-        markPicked(i);
+        it->picked = true;  // con el evento, en la misma sección crítica
     }
     return Leg::arrived;  // aquí se destruye el Slot: entra el ticket siguiente
 }
 
+bool Courier::deliver(const std::string& id)
+{
+    // El mismo t va al log y a las estadísticas: el resumen debe coincidir con el log.
+    const std::int64_t deliveredAt = _clock.nowMs();
+    std::int64_t took = 0;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        const auto it = find(id);
+        if (!logEvent("orderDelivered", it->order, deliveredAt, false)) {
+            return false;
+        }
+        took = deliveredAt - it->order.createdAtMs();
+        _bag.erase(it);  // con el evento: nadie lo ve entregado y todavía en la mochila
+    }
+    ++_delivered;
+    _totalDeliveryMs += took;
+    _maxDeliveryMs = std::max(_maxDeliveryMs, took);
+    finished();  // después de registrar la entrega: la próxima asignación tiene un t posterior
+    return true;
+}
+
+void Courier::drop(const std::string& id)
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _bag.erase(find(id));
+    }
+    finished();  // no puede tomarlo: queda pendiente y la moto sigue con el siguiente
+}
+
 void Courier::run()
 {
-    std::deque<Carried> bag;  // la mochila, en orden de asignación; solo la toca este hilo
     for (;;) {
-        if (bag.empty()) {
-            // Sin pedidos: duerme sin CPU hasta que le asignen uno o le cierren la bandeja.
-            std::optional<Order> order = _inbox.take();
-            if (!order) {
-                return;
-            }
-            bag.push_back({std::move(*order), false});
+        // El primero de la mochila es el próximo a entregar (FIFO). Sin pedidos, duerme sin CPU.
+        const std::optional<Next> next = waitForWork();
+        if (!next) {
+            return;
         }
-        collect(bag);
-
-        // El primero de la mochila es el próximo a entregar (FIFO). Si falta recogerlo, a su restaurante.
-        if (!bag.front().picked) {
-            const Leg leg = pickUp(bag);
+        if (!next->picked) {
+            // Falta recogerlo: a su restaurante. Después vuelve a mirar la mochila desde el principio.
+            const Leg leg = pickUp(next->restaurant);
             if (leg == Leg::stopped) {
                 return;
             }
             if (leg == Leg::noPath) {
-                finished();  // no puede tomarlo: queda pendiente y la moto sigue con el siguiente
-                bag.pop_front();
-                dropFirst();
-                continue;
+                drop(next->id);
             }
+            continue;
         }
-
         // Al cliente hay camino desde el restaurante (si no, el pedido habría salido unreachable).
-        const Order& order = bag.front().order;
-        const Leg toCustomer = travel(order.destination(), false);
+        const Leg toCustomer = travel(next->destination, false);
         if (toCustomer == Leg::stopped) {
             return;
         }
         if (toCustomer == Leg::noPath) {
-            finished();  // no debería pasar; si pasa, el pedido queda pendiente y la moto sigue
-            bag.pop_front();
-            dropFirst();
+            drop(next->id);  // no debería pasar; si pasa, el pedido queda pendiente y la moto sigue
             continue;
         }
-        // El mismo t va al log y a las estadísticas: el resumen debe coincidir con el log.
-        const std::int64_t deliveredAt = _clock.nowMs();
-        if (!logEvent("orderDelivered", order, deliveredAt, false)) {
+        if (!deliver(next->id)) {
             return;
         }
-        const std::int64_t took = deliveredAt - order.createdAtMs();
-        ++_delivered;
-        _totalDeliveryMs += took;
-        _maxDeliveryMs = std::max(_maxDeliveryMs, took);
-        bag.pop_front();
-        dropFirst();
-        finished();  // después de registrar la entrega: la próxima asignación tiene un t posterior
     }
 }
 
