@@ -33,6 +33,17 @@ std::optional<Order> OrderBook::take()
     return order;
 }
 
+std::optional<Order> OrderBook::tryTake()
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (_orders.empty()) {
+        return std::nullopt;
+    }
+    std::optional<Order> order(std::move(_orders.front()));
+    _orders.pop_front();
+    return order;
+}
+
 void OrderBook::close()
 {
     {

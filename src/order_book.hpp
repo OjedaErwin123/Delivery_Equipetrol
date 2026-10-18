@@ -40,6 +40,9 @@ public:
     // Devuelve std::nullopt solo cuando está cerrado y vacío: señal para dejar de consumir.
     std::optional<Order> take();
 
+    // Como take(), pero sin esperar: un pedido si hay alguno, std::nullopt si no.
+    std::optional<Order> tryTake();
+
     // No llegarán más pedidos. Despierta a TODOS los que esperan para que ninguno quede bloqueado.
     void close();
 

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -30,6 +31,11 @@
 // Con restaurantes, en el restaurante hace fila (ticket) hasta tomar un puesto, espera la comida
 // si no está lista y la entrega dura kHandoverMs, todo con el puesto tomado. Sin restaurantes
 // (pruebas), la recogida es instantánea.
+//
+// La mochila: la moto lleva hasta bagCapacity pedidos asignados (el cupo lo controla la flota).
+// Los entrega en el orden en que se los asignaron (FIFO). En cada visita a un restaurante recoge
+// todos los pedidos de su mochila de ese restaurante (un solo ticket), esperando en el puesto a
+// que esté lista la comida del último.
 class Courier {
 public:
     // `clock`, `log` y `shutdown` los crea quien crea las motos y viven hasta después del join.
@@ -61,11 +67,20 @@ private:
     // Registra el evento salvo que se haya pedido parar o `t` ya pase el fin; false si no lo registró.
     bool logEvent(const char* event, const Order& order, std::int64_t t, bool withRestaurant);
 
+    // Un pedido en la mochila: lo asignado y si ya se recogió. La mochila (un deque en run) es
+    // local del hilo de la moto: nadie más la toca, así que no necesita lock.
+    struct Carried {
+        Order order;
+        bool picked = false;
+    };
+
     enum class Leg { arrived, noPath, stopped };
     // Un tramo hasta `place` (id de restaurante o de nodo): por el camino mínimo si hay mapa, o
     // `legMs` si no. noPath: no hay camino desde donde está (solo con mapas de evaluadores).
     Leg travel(const std::string& place, bool isRestaurant);
     void publish(const Trip& trip);
+    void collect(std::deque<Carried>& bag);  // pasa a la mochila lo que haya en la bandeja, sin esperar
+    Leg pickUp(std::deque<Carried>& bag);     // la visita al restaurante del primer pedido de la mochila
     void finished();  // terminó un pedido (entregado o imposible): libera su cupo en la flota
 
     const std::string _id;
