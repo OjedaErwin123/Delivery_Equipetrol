@@ -69,6 +69,16 @@ std::optional<std::size_t> RoadGraph::nodeIndex(const std::string& id) const
     return it->second;
 }
 
+bool RoadGraph::hasStreet(std::size_t from, std::size_t to) const
+{
+    return std::any_of(_out[from].begin(), _out[from].end(), [to](const Edge& edge) { return edge.to == to; });
+}
+
+double RoadGraph::streetMeters(std::size_t a, std::size_t b) const
+{
+    return haversineMeters(_coordinates[a].lat, _coordinates[a].lon, _coordinates[b].lat, _coordinates[b].lon);
+}
+
 std::optional<RoadGraph::Path> RoadGraph::shortestPath(std::size_t from, std::size_t to) const
 {
     const Search search = dijkstra(from);
