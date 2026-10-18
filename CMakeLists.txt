@@ -82,6 +82,7 @@ add_executable(delivery_sim
   src/road_graph.cpp
   src/stop_signal.cpp
   src/courier.cpp
+  src/travel.cpp
   src/order_book.cpp
   src/event_log.cpp
 )
@@ -96,7 +97,7 @@ add_executable(event_log_check tests/event_log_check.cpp src/event_log.cpp)
 delivery_target_options(event_log_check)
 add_test(NAME event_log_check COMMAND event_log_check)
 
-add_executable(courier_check tests/courier_check.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
+add_executable(courier_check tests/courier_check.cpp src/courier.cpp src/travel.cpp src/road_graph.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(courier_check)
 add_test(NAME courier_check COMMAND courier_check)
 
@@ -104,27 +105,32 @@ add_executable(order_book_check tests/order_book_check.cpp src/order_book.cpp)
 delivery_target_options(order_book_check)
 add_test(NAME order_book_check COMMAND order_book_check)
 
-add_executable(flow_check tests/flow_check.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
+add_executable(flow_check tests/flow_check.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp src/travel.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(flow_check)
 add_test(NAME flow_check COMMAND flow_check)
 
-add_executable(json_check tests/json_check.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
+add_executable(json_check tests/json_check.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp src/travel.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(json_check)
 target_link_libraries(json_check PRIVATE nlohmann_json)
 add_test(NAME json_check COMMAND json_check)
 
-add_executable(orders_check tests/orders_check.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
+add_executable(orders_check tests/orders_check.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp src/travel.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(orders_check)
 add_test(NAME orders_check COMMAND orders_check)
 
-add_executable(stop_check tests/stop_check.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
+add_executable(stop_check tests/stop_check.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp src/travel.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(stop_check)
 add_test(NAME stop_check COMMAND stop_check)
 
-add_executable(signal_check tests/signal_check.cpp src/stop_signal.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp src/order_book.cpp src/event_log.cpp)
+add_executable(signal_check tests/signal_check.cpp src/stop_signal.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp src/travel.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(signal_check)
 add_test(NAME signal_check_int COMMAND signal_check INT)
 add_test(NAME signal_check_term COMMAND signal_check TERM)
+
+add_executable(travel_check tests/travel_check.cpp src/courier.cpp src/travel.cpp src/road_graph.cpp src/order_book.cpp
+               src/event_log.cpp)
+delivery_target_options(travel_check)
+add_test(NAME travel_check COMMAND travel_check)
 
 add_executable(restaurant_check tests/restaurant_check.cpp src/restaurant.cpp)
 delivery_target_options(restaurant_check)
@@ -140,14 +146,14 @@ delivery_target_options(road_graph_check)
 target_link_libraries(road_graph_check PRIVATE nlohmann_json)
 add_test(NAME road_graph_check COMMAND road_graph_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
 
-add_executable(cli_check tests/cli_check.cpp src/cli.cpp src/config.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp
+add_executable(cli_check tests/cli_check.cpp src/cli.cpp src/config.cpp src/simulation.cpp src/road_graph.cpp src/courier.cpp src/travel.cpp
                src/order_book.cpp src/event_log.cpp)
 delivery_target_options(cli_check)
 target_link_libraries(cli_check PRIVATE nlohmann_json)
 add_test(NAME cli_check COMMAND cli_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
 
 add_executable(unreachable_check tests/unreachable_check.cpp src/config.cpp src/simulation.cpp src/road_graph.cpp
-               src/courier.cpp src/order_book.cpp src/event_log.cpp)
+               src/courier.cpp src/travel.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(unreachable_check)
 target_link_libraries(unreachable_check PRIVATE nlohmann_json)
 add_test(NAME unreachable_check COMMAND unreachable_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
