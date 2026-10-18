@@ -15,7 +15,9 @@
 // terminar un pedido (baja). "Elegir una moto con lugar" y "reservarle el cupo" son UNA sola
 // operación con el lock tomado (reserve): si el despachador mirara primero si hay lugar y
 // después asignara, entre las dos cosas otra asignación podría llenar la mochila
-// (check-then-act). _assigned y _aborted solo se tocan con _mutex tomado: no hay data race.
+// (check-then-act). _assigned, _broken y _aborted solo se tocan con _mutex tomado: no hay data race.
+//
+// Una moto averiada no tiene lugar para nadie: no es candidata ni se le puede reservar cupo.
 class Fleet {
 public:
     Fleet(std::size_t couriers, std::size_t bagCapacity);
@@ -44,16 +46,23 @@ public:
     // La moto `courier` terminó un pedido (lo entregó o no pudo tomarlo): libera su cupo.
     void release(std::size_t courier);
 
+    // La moto se averió (true) o ya se reparó (false). Al repararse cambia la versión: el despachador
+    // que esperaba una moto con lugar se despierta.
+    void setBroken(std::size_t courier, bool broken);
+
     // Detención: despierta al que espera en reserve (devuelve std::nullopt).
     void abort();
 
     std::size_t assigned(std::size_t courier) const;
 
 private:
+    bool hasSpace(std::size_t courier) const { return !_broken[courier] && _assigned[courier] < _capacity; }
+
     const std::size_t _capacity;
     mutable std::mutex _mutex;
     std::condition_variable _space;
     std::vector<std::size_t> _assigned;
+    std::vector<bool> _broken;
     bool _aborted = false;
     std::uint64_t _version = 0;
 };

@@ -1,6 +1,9 @@
 #include "fleet.hpp"
 
-Fleet::Fleet(std::size_t couriers, std::size_t bagCapacity) : _capacity(bagCapacity), _assigned(couriers, 0) {}
+Fleet::Fleet(std::size_t couriers, std::size_t bagCapacity)
+    : _capacity(bagCapacity), _assigned(couriers, 0), _broken(couriers, false)
+{
+}
 
 std::optional<std::size_t> Fleet::reserve(std::size_t from)
 {
@@ -11,7 +14,7 @@ std::optional<std::size_t> Fleet::reserve(std::size_t from)
     _space.wait(lock, [&] {
         for (std::size_t k = 0; k < n && !_aborted; ++k) {
             const std::size_t i = (from + k) % n;
-            if (_assigned[i] < _capacity) {
+            if (hasSpace(i)) {
                 chosen = i;
                 return true;
             }
@@ -30,7 +33,7 @@ std::vector<std::size_t> Fleet::withSpace() const
     std::lock_guard<std::mutex> lock(_mutex);
     std::vector<std::size_t> free;
     for (std::size_t i = 0; i < _assigned.size(); ++i) {
-        if (_assigned[i] < _capacity) {
+        if (hasSpace(i)) {
             free.push_back(i);
         }
     }
@@ -40,7 +43,7 @@ std::vector<std::size_t> Fleet::withSpace() const
 bool Fleet::tryReserve(std::size_t courier)
 {
     std::lock_guard<std::mutex> lock(_mutex);
-    if (_aborted || _assigned[courier] >= _capacity) {
+    if (_aborted || !hasSpace(courier)) {
         return false;
     }
     ++_assigned[courier];
@@ -68,6 +71,16 @@ void Fleet::release(std::size_t courier)
         ++_version;
     }
     // Solo el despachador espera en reserve: alcanza con despertar a uno.
+    _space.notify_one();
+}
+
+void Fleet::setBroken(std::size_t courier, bool broken)
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _broken[courier] = broken;
+        ++_version;
+    }
     _space.notify_one();
 }
 
