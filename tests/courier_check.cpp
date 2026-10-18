@@ -37,7 +37,7 @@ int main()
     for (int i = 0; i < kOrders; ++i) {
         createdAt.push_back(clock.nowMs());
         Order order("o" + std::to_string(i), "r" + std::to_string(i % 3), "n" + std::to_string(i), createdAt.back());
-        if (courier->inbox().submit(std::move(order)) != OrderBook::Submit::accepted) {
+        if (courier->assign(std::move(order)) != OrderBook::Submit::accepted) {
             ok = check("bandeja abierta mientras se envían pedidos", false);
         }
     }

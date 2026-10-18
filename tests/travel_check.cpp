@@ -81,7 +81,7 @@ int main()
     auto courier = std::make_shared<Courier>("c0", clock, log, shutdown, 60000, world(c, "a"));
     std::thread worker(&Courier::run, courier);
     const std::int64_t createdAt = clock.nowMs();
-    if (courier->inbox().submit(Order("o0", "r0", "c", createdAt)) != OrderBook::Submit::accepted) {
+    if (courier->assign(Order("o0", "r0", "c", createdAt)) != OrderBook::Submit::accepted) {
         ok = check("bandeja abierta", false);
     }
     // Mientras viaja, otro hilo lee su viaje (lo que hará la ventana): TSan vigila este acceso. Se
@@ -121,7 +121,7 @@ int main()
     EventLog stuckLog(stuckOut);
     auto stuck = std::make_shared<Courier>("c1", clock, stuckLog, shutdown, 60000, world(c, "e"));
     std::thread stuckWorker(&Courier::run, stuck);
-    if (stuck->inbox().submit(Order("o1", "r0", "c", clock.nowMs())) != OrderBook::Submit::accepted) {
+    if (stuck->assign(Order("o1", "r0", "c", clock.nowMs())) != OrderBook::Submit::accepted) {
         ok = check("bandeja abierta", false);
     }
     stuck->inbox().close();

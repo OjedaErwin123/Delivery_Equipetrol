@@ -44,7 +44,7 @@ std::map<std::string, Pickup> run(int count, std::size_t slots, std::int64_t pre
         threads.emplace_back(&Courier::run, couriers.back());
         Order order("o" + std::to_string(i), "r0", "n1", assignedAt, prepMs);
         order.markAssigned(assignedAt);
-        if (couriers.back()->inbox().submit(std::move(order)) != OrderBook::Submit::accepted) {
+        if (couriers.back()->assign(std::move(order)) != OrderBook::Submit::accepted) {
             std::cout << "bandeja cerrada\n";
         }
         couriers.back()->inbox().close();
@@ -121,7 +121,7 @@ int main()
         threads.emplace_back(&Courier::run, couriers.back());
         Order order("o" + std::to_string(i), "r0", "n1", 0, 3600000);  // la comida tarda 1 h simulada
         order.markAssigned(0);
-        if (couriers.back()->inbox().submit(std::move(order)) != OrderBook::Submit::accepted) {
+        if (couriers.back()->assign(std::move(order)) != OrderBook::Submit::accepted) {
             std::cout << "bandeja cerrada\n";
         }
         couriers.back()->inbox().close();
