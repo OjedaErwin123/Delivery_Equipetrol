@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -45,6 +46,11 @@ public:
 
     // La moto `courier` terminó un pedido (lo entregó o no pudo tomarlo): libera su cupo.
     void release(std::size_t courier);
+
+    // Traspaso: pasar los `count` cupos de `from` a `to` si `to` no está averiada y le alcanza el
+    // lugar. Con el lock tomado y la validación hecha llama a `commit` (que mueve los pedidos y los
+    // registra): si devuelve false (detención), la flota queda como estaba. Todo o nada.
+    bool moveAssigned(std::size_t from, std::size_t to, std::size_t count, const std::function<bool()>& commit);
 
     // La moto se averió (true) o ya se reparó (false). Al repararse cambia la versión: el despachador
     // que esperaba una moto con lugar se despierta.

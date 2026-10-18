@@ -79,6 +79,15 @@ public:
 
     void run();
 
+    // El traspaso de TODA la mochila de esta moto a `to`, de una vez (todo o nada: ningún observador
+    // ve un pedido en las dos mochilas ni en ninguna). Toma los dos mutex a la vez con
+    // std::scoped_lock, así dos motos que se traspasan mutuamente al mismo tiempo no se bloquean;
+    // revalida (que `to` siga abierta, no averiada y con lugar para todos), pasa los cupos en la
+    // flota, registra un orderReassigned por pedido y los mueve al PRINCIPIO de la mochila de `to`,
+    // en su orden, todo en la misma sección crítica. refused: no se movió nada (probar con otra).
+    enum class Handover { done, refused, stopped };
+    Handover transferTo(Courier& to);
+
     // El viaje actual (o la moto quieta), como copia: quien lo lee (la ventana, las estimaciones)
     // calcula la posición fuera del lock. Lo escribe solo el hilo de la moto, con _mutex.
     Trip trip() const;
@@ -91,6 +100,7 @@ public:
     std::int64_t totalDeliveryMs() const { return _totalDeliveryMs; }
     std::int64_t maxDeliveryMs() const { return _maxDeliveryMs; }
     int breakdowns() const { return _breakdowns; }
+    int reassigned() const { return _reassigned; }  // pedidos que esta moto traspasó
 
 private:
     // Registra el evento salvo que se haya pedido parar o `t` ya pase el fin; false si no lo registró.
@@ -152,4 +162,5 @@ private:
     const double _breakdownProbability;
     std::mt19937 _rng;  // propio de esta moto: solo lo usa su hilo (como el del generador de pedidos)
     int _breakdowns = 0;
+    int _reassigned = 0;  // lo escribe solo el hilo que traspasa la mochila de esta moto
 };
