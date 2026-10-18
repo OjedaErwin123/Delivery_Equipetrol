@@ -44,7 +44,7 @@ int main()
     for (int i = 0; i < 3; ++i) {
         Order order("o" + std::to_string(i), restaurant[i], destination[i], assignedAt, prep[i]);
         order.markAssigned(assignedAt);
-        if (courier->inbox().submit(std::move(order)) != OrderBook::Submit::accepted) {
+        if (courier->assign(std::move(order)) != OrderBook::Submit::accepted) {
             ok = check("bandeja abierta", false);
         }
     }

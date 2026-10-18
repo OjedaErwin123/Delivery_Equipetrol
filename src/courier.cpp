@@ -10,7 +10,7 @@ Courier::Courier(std::string id, const SimClock& clock, EventLog& log, const Shu
                  std::shared_ptr<const Restaurants> restaurants, std::shared_ptr<Fleet> fleet, std::size_t index)
     : _id(std::move(id)), _clock(clock), _log(log), _shutdown(shutdown), _legMs(legMs), _world(std::move(world)),
       _restaurants(std::move(restaurants)), _fleet(std::move(fleet)), _index(index),
-      _node(_world ? _world->startNode : 0), _trip(Trip::stay(_node, 0))
+      _node(_world ? _world->startNode : 0), _plan(Trip::stay(_node, 0))
 {
 }
 
@@ -24,13 +24,44 @@ void Courier::finished()
 Trip Courier::trip() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
-    return _trip;
+    return _plan.trip;
+}
+
+CourierPlan Courier::plan() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _plan;
+}
+
+OrderBook::Submit Courier::assign(Order&& order)
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _plan.orders.push_back({order.restaurant(), order.destination(), order.readyAtMs(), false});
+    }
+    return _inbox.submit(std::move(order));  // solo falla si se está deteniendo: el plan ya no importa
 }
 
 void Courier::publish(const Trip& trip)
 {
     std::lock_guard<std::mutex> lock(_mutex);
-    _trip = trip;
+    _plan.trip = trip;
+}
+
+void Courier::markPicked(std::size_t i)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (i < _plan.orders.size()) {
+        _plan.orders[i].picked = true;
+    }
+}
+
+void Courier::dropFirst()
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_plan.orders.empty()) {
+        _plan.orders.erase(_plan.orders.begin());
+    }
 }
 
 Courier::Leg Courier::travel(const std::string& place, bool isRestaurant)
@@ -106,6 +137,7 @@ Courier::Leg Courier::pickUp(std::deque<Carried>& bag)
             return Leg::stopped;
         }
         bag[i].picked = true;
+        markPicked(i);
     }
     return Leg::arrived;  // aquí se destruye el Slot: entra el ticket siguiente
 }
@@ -133,6 +165,7 @@ void Courier::run()
             if (leg == Leg::noPath) {
                 finished();  // no puede tomarlo: queda pendiente y la moto sigue con el siguiente
                 bag.pop_front();
+                dropFirst();
                 continue;
             }
         }
@@ -146,6 +179,7 @@ void Courier::run()
         if (toCustomer == Leg::noPath) {
             finished();  // no debería pasar; si pasa, el pedido queda pendiente y la moto sigue
             bag.pop_front();
+            dropFirst();
             continue;
         }
         // El mismo t va al log y a las estadísticas: el resumen debe coincidir con el log.
@@ -158,6 +192,7 @@ void Courier::run()
         _totalDeliveryMs += took;
         _maxDeliveryMs = std::max(_maxDeliveryMs, took);
         bag.pop_front();
+        dropFirst();
         finished();  // después de registrar la entrega: la próxima asignación tiene un t posterior
     }
 }

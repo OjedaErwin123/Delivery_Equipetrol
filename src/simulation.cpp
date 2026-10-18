@@ -164,7 +164,7 @@ void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
         if (!shutdown.unlessStopped(e.t, [&log, &e] { log.write(e); })) {
             break;  // se detuvo (o su t ya pasó el fin): el pedido queda pendiente
         }
-        if (courier.inbox().submit(std::move(*order)) != OrderBook::Submit::accepted) {
+        if (courier.assign(std::move(*order)) != OrderBook::Submit::accepted) {
             if (shutdown.requested()) {
                 break;  // bandeja abortada: el pedido queda pendiente
             }
