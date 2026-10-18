@@ -41,22 +41,25 @@ Coordinates coordinatesOf(const RoadGraph& graph, const Place& place);
 // Para mensajes: el id del nodo, o "a-b@metros".
 std::string describe(const RoadGraph& graph, const Place& place);
 
-// Un recorrido: desde un lugar hasta un nodo. Si sale de mitad de una calle, primero termina esa
-// calle hacia `path.nodes.front()` (hacia adelante, o hacia atrás si la calle es de doble sentido)
-// y después sigue el camino mínimo.
+// Un recorrido: desde un lugar hasta un nodo, o hasta un punto de una calle (`finish`). Si sale de
+// mitad de una calle, primero termina esa calle hacia `path.nodes.front()` (hacia adelante, o hacia
+// atrás si la calle es de doble sentido) y después sigue el camino mínimo; si termina a mitad de una
+// calle, entra a ella desde `path.nodes.back()`. Sin nodos: los dos puntos están en la misma calle.
 struct Route {
     Place start;
     RoadGraph::Path path;  // desde el nodo por el que sale de la calle (o `start` si es un nodo)
-    double meters = 0;     // en total, incluido el pedazo de calle inicial
+    double meters = 0;     // en total, incluidos los pedazos de calle del principio y del final
+    std::optional<Place> finish;  // el punto de llegada, si no es un nodo
 };
 
 // El recorrido más corto de `from` a `to`, respetando el sentido único también en la calle donde
 // está (por una calle a→b de sentido único solo se sale por b). std::nullopt si no hay camino.
 std::optional<Route> routeTo(const RoadGraph& graph, const Place& from, std::size_t to);
+// Lo mismo hasta un lugar cualquiera: a un punto de la calle a→b se entra por a, o también por b si
+// es de doble sentido (o directo, si los dos están en la misma calle y el sentido lo permite).
+std::optional<Route> routeTo(const RoadGraph& graph, const Place& from, const Place& to);
 
-// Metros del recorrido más corto de `from` a `to`, cuando `to` puede estar a mitad de una calle a→b:
-// se entra por a, o también por b si la calle es de doble sentido (o directo, si los dos están en
-// la misma calle y el sentido lo permite). std::nullopt si no hay camino.
+// Metros del recorrido más corto de `from` a `to` (routeTo). std::nullopt si no hay camino.
 std::optional<double> metersBetween(const RoadGraph& graph, const Place& from, const Place& to);
 
 // Un viaje por las calles: el recorrido, la hora de salida y la velocidad. La moto lo publica una
