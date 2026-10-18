@@ -98,8 +98,11 @@ int main(int argc, char** argv)
     // Sin límite del libro: aquí solo se cuentan los unreachable. Con el maxPending de la
     // configuración (50), cuando todo corre lento (TSan, Valgrind) el despachador no alcanza a
     // vaciar el libro entre ráfagas y aparecen además rechazos queueFull (visto: 60-101 en vez
-    // de 45). El caso con los dos motivos lo cubre el paso 5.
+    // de 45). El caso con los dos motivos lo cubre el paso 5. Por lo mismo, sin vencimiento práctico
+    // de la asignación: 3000 pedidos para 8 motos esperan más de acceptTimeoutMs y saldrían noCourier
+    // (eso lo prueba dispatch_check). 1e12 ms y no el máximo de int64 para no desbordar los plazos.
     p.maxPending.reset();
+    p.acceptTimeoutMs = 1000000000000;
     const Run run = simulate(p);
     bool wellFormed = true;
     const std::set<std::string> unreachable = rejectedFor(run, "unreachable", wellFormed);
