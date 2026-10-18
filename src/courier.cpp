@@ -87,6 +87,55 @@ std::deque<Courier::Carried>::iterator Courier::find(const std::string& id)
     return std::find_if(_bag.begin(), _bag.end(), [&id](const Carried& c) { return c.order.id() == id; });
 }
 
+Courier::Handover Courier::transferTo(Courier& to)
+{
+    if (&to == this) {
+        return Handover::refused;
+    }
+    bool stopped = false;
+    {
+        // Orden de locks: las dos motos (juntas), después la flota, después Shutdown y el log.
+        std::scoped_lock both(_mutex, to._mutex);
+        if (_bag.empty()) {
+            return Handover::done;
+        }
+        if (to._closed || to._aborted) {
+            return Handover::refused;
+        }
+        const std::int64_t t = _clock.nowMs();
+        const auto commit = [&] {
+            // Los eventos de todos los pedidos en UNA llamada: o se registran todos, o ninguno.
+            const bool logged = _shutdown.unlessStopped(t, [&] {
+                for (const Carried& c : _bag) {
+                    Event e;
+                    e.t = t;
+                    e.event = "orderReassigned";
+                    e.order = c.order.id();
+                    e.from = _id;
+                    e.to = to._id;
+                    _log.write(e);
+                }
+            });
+            if (!logged) {
+                stopped = true;
+                return false;
+            }
+            for (auto it = _bag.rbegin(); it != _bag.rend(); ++it) {
+                to._bag.push_front(std::move(*it));  // al principio, en el mismo orden (los Order se mueven: 02)
+            }
+            _reassigned += static_cast<int>(_bag.size());
+            _bag.clear();
+            return true;
+        };
+        const bool moved = _fleet ? _fleet->moveAssigned(_index, to._index, _bag.size(), commit) : commit();
+        if (!moved) {
+            return stopped ? Handover::stopped : Handover::refused;
+        }
+    }
+    to._work.notify_one();  // por si estaba esperando trabajo
+    return Handover::done;
+}
+
 void Courier::publish(const Trip& trip)
 {
     std::lock_guard<std::mutex> lock(_mutex);
