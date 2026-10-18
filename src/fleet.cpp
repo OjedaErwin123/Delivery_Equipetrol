@@ -25,11 +25,47 @@ std::optional<std::size_t> Fleet::reserve(std::size_t from)
     return chosen;
 }
 
+std::vector<std::size_t> Fleet::withSpace() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    std::vector<std::size_t> free;
+    for (std::size_t i = 0; i < _assigned.size(); ++i) {
+        if (_assigned[i] < _capacity) {
+            free.push_back(i);
+        }
+    }
+    return free;
+}
+
+bool Fleet::tryReserve(std::size_t courier)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (_aborted || _assigned[courier] >= _capacity) {
+        return false;
+    }
+    ++_assigned[courier];
+    return true;
+}
+
+std::uint64_t Fleet::version() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _version;
+}
+
+bool Fleet::waitForChange(std::uint64_t seen, std::chrono::steady_clock::time_point deadline)
+{
+    std::unique_lock<std::mutex> lock(_mutex);
+    _space.wait_until(lock, deadline, [this, seen] { return _aborted || _version != seen; });
+    return !_aborted;
+}
+
 void Fleet::release(std::size_t courier)
 {
     {
         std::lock_guard<std::mutex> lock(_mutex);
         --_assigned[courier];
+        ++_version;
     }
     // Solo el despachador espera en reserve: alcanza con despertar a uno.
     _space.notify_one();
