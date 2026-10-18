@@ -79,6 +79,9 @@ public:
     // el destino; entre medio, sobre la calle que recorre según los metros andados. Nunca fuera
     // de las calles del recorrido.
     Place placeAt(std::int64_t t) const;
+    // El mismo viaje, pero cortado en el instante `t`: llega (y queda) donde iba en `t`. Lo publica
+    // una moto que se va a averiar en `t`: así nadie la ve pasar del punto de la avería.
+    Trip until(std::int64_t t) const;
     Coordinates positionAt(const RoadGraph& graph, std::int64_t t) const;
 
 private:

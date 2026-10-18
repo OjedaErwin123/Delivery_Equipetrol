@@ -123,6 +123,14 @@ Place Trip::placeAt(std::int64_t t) const
     return Place(s.a, s.b, along);
 }
 
+Trip Trip::until(std::int64_t t) const
+{
+    Trip cut = *this;
+    cut._to = placeAt(t);
+    cut._arrivalMs = std::max(t, _departMs);
+    return cut;
+}
+
 Coordinates Trip::positionAt(const RoadGraph& graph, std::int64_t t) const
 {
     return coordinatesOf(graph, placeAt(t));
