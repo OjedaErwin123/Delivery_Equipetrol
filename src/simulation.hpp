@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "config.hpp"
+#include "travel.hpp"
 
 // Ids "r0", "r1", ... (o "n0", ...): los valores por defecto de las pruebas.
 inline std::vector<std::string> numberedIds(const std::string& prefix, int count)
@@ -31,10 +33,13 @@ struct SimParams {
     // reachable[r][d]: ¿hay camino por las calles del restaurante r al destino d? Vacío = todo
     // alcanzable (las pruebas sin mapa). Se arma antes de lanzar hilos y nadie lo modifica después.
     std::vector<std::vector<bool>> reachable;
+    // El mapa (grafo, restaurantes, inicio, velocidad), compartido por todas las motos y de solo
+    // lectura. nullptr = sin mapa (las pruebas): cada tramo dura legMs.
+    std::shared_ptr<const World> world;
     std::int64_t meanIntervalMs = 36000;  // tiempo simulado medio entre dos pedidos (con ráfagas también)
     int burstMax = 1;                     // cada llegada trae entre 1 y burstMax pedidos en el mismo instante
     std::optional<std::size_t> maxPending;  // límite del libro (queueFull); sin valor, sin límite
-    std::int64_t legMs = 60000;           // duración simulada de cada tramo de viaje (v0: fija)
+    std::int64_t legMs = 60000;           // sin mapa: duración simulada de cada tramo de viaje
     double timeScale = 60.0;              // segundos simulados por segundo real
     std::uint32_t seed = 42;
     std::int64_t durationS = 0;           // fin por tiempo simulado; 0 = hasta una señal (o hasta `orders`)

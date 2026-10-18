@@ -29,6 +29,7 @@ RoadGraph::RoadGraph(const Config& config) : _out(config.nodes.size())
 {
     for (std::size_t i = 0; i < config.nodes.size(); ++i) {
         _ids.push_back(config.nodes[i].id);
+        _coordinates.push_back({config.nodes[i].lat, config.nodes[i].lon});
         _index.emplace(config.nodes[i].id, i);
     }
     for (const StreetConfig& street : config.streets) {

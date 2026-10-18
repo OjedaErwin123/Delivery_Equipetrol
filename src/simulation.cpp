@@ -192,15 +192,23 @@ SimParams paramsFromConfig(const Config& c)
         }
     }
 
+    // El mapa que comparten las motos: se arma una vez aquí y después nadie lo modifica.
+    auto world = std::make_shared<World>(World{RoadGraph(c), {}, 0, c.speedKmh / 3600.0});  // km/h -> m/ms
+    const RoadGraph& graph = world->graph;
+    world->startNode = *graph.nodeIndex(c.startNode);
+    for (const RestaurantConfig& r : c.restaurants) {
+        world->restaurantNode.emplace(r.id, *graph.nodeIndex(r.node));
+    }
+
     // unreachable: sin camino dirigido del nodo del restaurante al destino. El grafo ya precalculó
     // las distancias desde cada restaurante (un Dijkstra por restaurante); aquí solo se consulta.
-    const RoadGraph graph(c);
     p.reachable.assign(p.restaurants.size(), std::vector<bool>(p.destinations.size()));
     for (std::size_t r = 0; r < p.restaurants.size(); ++r) {
         for (std::size_t d = 0; d < p.destinations.size(); ++d) {
             p.reachable[r][d] = graph.reachableFromRestaurant(r, *graph.nodeIndex(p.destinations[d]));
         }
     }
+    p.world = std::move(world);
     return p;
 }
 
@@ -226,7 +234,7 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
     // mientras alguno la use.
     std::vector<std::shared_ptr<Courier>> couriers;
     for (int i = 0; i < p.couriers; ++i) {
-        couriers.push_back(std::make_shared<Courier>("c" + std::to_string(i), clock, log, shutdown, p.legMs));
+        couriers.push_back(std::make_shared<Courier>("c" + std::to_string(i), clock, log, shutdown, p.legMs, p.world));
     }
     std::vector<std::thread> courierThreads;
     courierThreads.reserve(couriers.size());

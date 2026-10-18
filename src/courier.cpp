@@ -5,17 +5,58 @@
 #include <utility>
 
 Courier::Courier(std::string id, const SimClock& clock, EventLog& log, const Shutdown& shutdown,
-                 std::int64_t legMs)
-    : _id(std::move(id)), _clock(clock), _log(log), _shutdown(shutdown), _legMs(legMs)
+                 std::int64_t legMs, std::shared_ptr<const World> world)
+    : _id(std::move(id)), _clock(clock), _log(log), _shutdown(shutdown), _legMs(legMs), _world(std::move(world)),
+      _node(_world ? _world->startNode : 0), _trip(Trip::stay(_node, 0))
 {
+}
+
+Trip Courier::trip() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _trip;
+}
+
+void Courier::publish(const Trip& trip)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    _trip = trip;
+}
+
+Courier::Leg Courier::travel(const std::string& place, bool isRestaurant)
+{
+    if (!_world) {
+        return _shutdown.sleepUntil(_clock.realTimeIn(_legMs)) ? Leg::stopped : Leg::arrived;
+    }
+    const std::size_t target = isRestaurant ? _world->restaurantNode.at(place) : *_world->graph.nodeIndex(place);
+    const std::optional<RoadGraph::Path> path = _world->graph.shortestPath(_node, target);
+    if (!path) {
+        return Leg::noPath;
+    }
+    // Se publica el viaje una vez y se duerme hasta la llegada: la posición en cada instante
+    // sale del Trip (función del tiempo), la moto no despierta para "avanzar".
+    const Trip trip(_world->graph, *path, _clock.nowMs(), _world->metersPerMs);
+    publish(trip);
+    if (_shutdown.sleepUntil(_clock.realTimeAt(trip.arrivalMs()))) {
+        return Leg::stopped;
+    }
+    _node = target;
+    publish(Trip::stay(target, trip.arrivalMs()));
+    return Leg::arrived;
 }
 
 void Courier::run()
 {
     while (std::optional<Order> order = _inbox.take()) {
         // Cada tramo es una espera interrumpible: si se pide parar, el pedido queda pendiente.
-        if (_shutdown.sleepUntil(_clock.realTimeIn(_legMs))) {  // viaje al restaurante
+        // Sin camino hasta el restaurante (moto atrapada, solo con mapas de evaluadores), no
+        // puede tomar el pedido: queda pendiente y la moto sigue con el siguiente.
+        const Leg toRestaurant = travel(order->restaurant(), true);
+        if (toRestaurant == Leg::stopped) {
             return;
+        }
+        if (toRestaurant == Leg::noPath) {
+            continue;
         }
         // Un evento negado (se pidió parar, o su t ya pasó el fin) también corta: el pedido queda pendiente.
         const std::int64_t pickedAt = _clock.nowMs();
@@ -23,8 +64,13 @@ void Courier::run()
             return;
         }
 
-        if (_shutdown.sleepUntil(_clock.realTimeIn(_legMs))) {  // viaje al cliente
+        // Al cliente hay camino desde el restaurante (si no, el pedido habría salido unreachable).
+        const Leg toCustomer = travel(order->destination(), false);
+        if (toCustomer == Leg::stopped) {
             return;
+        }
+        if (toCustomer == Leg::noPath) {
+            continue;  // no debería pasar; si pasa, el pedido queda pendiente y la moto sigue
         }
         // El mismo t va al log y a las estadísticas: el resumen debe coincidir con el log.
         const std::int64_t deliveredAt = _clock.nowMs();
