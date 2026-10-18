@@ -148,6 +148,10 @@ add_executable(bag_check tests/bag_check.cpp src/courier.cpp src/travel.cpp src/
 delivery_target_options(bag_check)
 add_test(NAME bag_check COMMAND bag_check)
 
+add_executable(pool_check tests/pool_check.cpp src/thread_pool.cpp)
+delivery_target_options(pool_check)
+add_test(NAME pool_check COMMAND pool_check)
+
 add_executable(restaurant_check tests/restaurant_check.cpp src/restaurant.cpp)
 delivery_target_options(restaurant_check)
 add_test(NAME restaurant_check COMMAND restaurant_check)
