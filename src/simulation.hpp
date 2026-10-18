@@ -36,6 +36,13 @@ struct SimParams {
     // El mapa (grafo, restaurantes, inicio, velocidad), compartido por todas las motos y de solo
     // lectura. nullptr = sin mapa (las pruebas): cada tramo dura legMs.
     std::shared_ptr<const World> world;
+    // Por restaurante (en el orden de `restaurants`): puestos y rango de preparación. Vacío = sin
+    // restaurantes con puestos (las pruebas): la recogida es instantánea y no hay preparación.
+    struct Kitchen {
+        std::size_t pickupSlots = 1;
+        std::int64_t prepMinMs = 0, prepMaxMs = 0;
+    };
+    std::vector<Kitchen> kitchens;
     std::int64_t meanIntervalMs = 36000;  // tiempo simulado medio entre dos pedidos (con ráfagas también)
     int burstMax = 1;                     // cada llegada trae entre 1 y burstMax pedidos en el mismo instante
     std::optional<std::size_t> maxPending;  // límite del libro (queueFull); sin valor, sin límite
