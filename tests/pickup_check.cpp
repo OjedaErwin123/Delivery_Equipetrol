@@ -47,7 +47,7 @@ std::map<std::string, Pickup> run(int count, std::size_t slots, std::int64_t pre
         if (couriers.back()->assign(std::move(order)) != OrderBook::Submit::accepted) {
             std::cout << "bandeja cerrada\n";
         }
-        couriers.back()->inbox().close();
+        couriers.back()->close();
     }
     for (std::thread& t : threads) {
         t.join();
@@ -124,7 +124,7 @@ int main()
         if (couriers.back()->assign(std::move(order)) != OrderBook::Submit::accepted) {
             std::cout << "bandeja cerrada\n";
         }
-        couriers.back()->inbox().close();
+        couriers.back()->close();
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));  // representa "en algún momento" (no coordina)
     const auto stopAt = std::chrono::steady_clock::now();
