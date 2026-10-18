@@ -1,7 +1,9 @@
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -25,6 +27,20 @@ public:
     // std::nullopt si se abortó (detención).
     std::optional<std::size_t> reserve(std::size_t from);
 
+    // Las motos con lugar en la mochila: los candidatos del despachador. Es una foto: puede dejar de
+    // valer enseguida, por eso después se reserva con tryReserve (revalidar).
+    std::vector<std::size_t> withSpace() const;
+
+    // Reservar un cupo en ESA moto si todavía tiene lugar (comprobar y reservar con el mismo lock).
+    // false si se llenó desde que se estimó: el despachador prueba con la siguiente mejor.
+    bool tryReserve(std::size_t courier);
+
+    // Cada release cambia la versión. El despachador la lee ANTES de estimar y, si la ronda no le
+    // sirvió, espera a que cambie (alguna moto liberó un cupo) o a `deadline`: así no se pierde un
+    // aviso que llegó mientras estimaba, y no gira reintentando. false si se abortó.
+    std::uint64_t version() const;
+    bool waitForChange(std::uint64_t seen, std::chrono::steady_clock::time_point deadline);
+
     // La moto `courier` terminó un pedido (lo entregó o no pudo tomarlo): libera su cupo.
     void release(std::size_t courier);
 
@@ -39,4 +55,5 @@ private:
     std::condition_variable _space;
     std::vector<std::size_t> _assigned;
     bool _aborted = false;
+    std::uint64_t _version = 0;
 };
