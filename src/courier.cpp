@@ -6,10 +6,18 @@
 
 Courier::Courier(std::string id, const SimClock& clock, EventLog& log, const Shutdown& shutdown,
                  std::int64_t legMs, std::shared_ptr<const World> world,
-                 std::shared_ptr<const Restaurants> restaurants)
+                 std::shared_ptr<const Restaurants> restaurants, std::shared_ptr<Fleet> fleet, std::size_t index)
     : _id(std::move(id)), _clock(clock), _log(log), _shutdown(shutdown), _legMs(legMs), _world(std::move(world)),
-      _restaurants(std::move(restaurants)), _node(_world ? _world->startNode : 0), _trip(Trip::stay(_node, 0))
+      _restaurants(std::move(restaurants)), _fleet(std::move(fleet)), _index(index),
+      _node(_world ? _world->startNode : 0), _trip(Trip::stay(_node, 0))
 {
+}
+
+void Courier::finished()
+{
+    if (_fleet) {
+        _fleet->release(_index);
+    }
 }
 
 Trip Courier::trip() const
@@ -57,6 +65,7 @@ void Courier::run()
             return;
         }
         if (toRestaurant == Leg::noPath) {
+            finished();
             continue;
         }
         // En el restaurante: fila (ticket) hasta tomar un puesto. nullopt = se detuvo mientras esperaba.
@@ -90,6 +99,7 @@ void Courier::run()
             return;
         }
         if (toCustomer == Leg::noPath) {
+            finished();
             continue;  // no debería pasar; si pasa, el pedido queda pendiente y la moto sigue
         }
         // El mismo t va al log y a las estadísticas: el resumen debe coincidir con el log.
@@ -99,6 +109,7 @@ void Courier::run()
         }
 
         const std::int64_t took = deliveredAt - order->createdAtMs();
+        finished();  // después de registrar la entrega: la próxima asignación tiene un t posterior
         ++_delivered;
         _totalDeliveryMs += took;
         _maxDeliveryMs = std::max(_maxDeliveryMs, took);

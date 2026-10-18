@@ -43,6 +43,8 @@ struct SimParams {
         std::int64_t prepMinMs = 0, prepMaxMs = 0;
     };
     std::vector<Kitchen> kitchens;
+    // Máximo de pedidos asignados (y sin entregar) por moto; sin valor = sin límite (pruebas).
+    std::optional<std::size_t> bagCapacity;
     std::int64_t meanIntervalMs = 36000;  // tiempo simulado medio entre dos pedidos (con ráfagas también)
     int burstMax = 1;                     // cada llegada trae entre 1 y burstMax pedidos en el mismo instante
     std::optional<std::size_t> maxPending;  // límite del libro (queueFull); sin valor, sin límite

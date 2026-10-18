@@ -7,6 +7,7 @@
 #include <string>
 
 #include "event_log.hpp"
+#include "fleet.hpp"
 #include "order_book.hpp"
 #include "restaurant.hpp"
 #include "shutdown.hpp"
@@ -34,8 +35,11 @@ public:
     // `clock`, `log` y `shutdown` los crea quien crea las motos y viven hasta después del join.
     // `world` puede ser nullptr (pruebas sin mapa): entonces cada tramo dura `legMs`.
     // `restaurants` puede ser nullptr (pruebas): entonces la recogida es instantánea.
+    // `fleet` (con el índice de esta moto) lleva el cupo de la mochila: al terminar cada pedido la
+    // moto libera el suyo. nullptr = sin límite (pruebas).
     Courier(std::string id, const SimClock& clock, EventLog& log, const Shutdown& shutdown, std::int64_t legMs,
-            std::shared_ptr<const World> world = nullptr, std::shared_ptr<const Restaurants> restaurants = nullptr);
+            std::shared_ptr<const World> world = nullptr, std::shared_ptr<const Restaurants> restaurants = nullptr,
+            std::shared_ptr<Fleet> fleet = nullptr, std::size_t index = 0);
     Courier(const Courier&) = delete;
     Courier& operator=(const Courier&) = delete;
 
@@ -62,6 +66,7 @@ private:
     // `legMs` si no. noPath: no hay camino desde donde está (solo con mapas de evaluadores).
     Leg travel(const std::string& place, bool isRestaurant);
     void publish(const Trip& trip);
+    void finished();  // terminó un pedido (entregado o imposible): libera su cupo en la flota
 
     const std::string _id;
     const SimClock& _clock;
@@ -70,6 +75,8 @@ private:
     const std::int64_t _legMs;  // sin mapa: duración simulada de cada tramo de viaje
     const std::shared_ptr<const World> _world;
     const std::shared_ptr<const Restaurants> _restaurants;
+    const std::shared_ptr<Fleet> _fleet;
+    const std::size_t _index;  // su lugar en la flota
     OrderBook _inbox;
 
     std::size_t _node;              // dónde está; solo lo usa el hilo de la moto

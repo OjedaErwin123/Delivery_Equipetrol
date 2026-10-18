@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
@@ -13,6 +14,7 @@
 
 #include "courier.hpp"
 #include "event_log.hpp"
+#include "fleet.hpp"
 #include "order_book.hpp"
 #include "road_graph.hpp"
 #include "shutdown.hpp"
@@ -135,17 +137,23 @@ Generated generateOrders(const SimParams& p, const SimClock& clock, EventLog& lo
     }
 }
 
-// Hilo despachador (v0): reparte por turnos. Cuando el libro está cerrado y vacío,
+// Hilo despachador (v0): reparte por turnos entre las motos con lugar en la mochila (la flota
+// elige y reserva el cupo en una sola operación; si todas están llenas, duerme hasta que alguna
+// entregue: mientras tanto los pedidos esperan en el libro y, si se llena, salen queueFull). Cuando el libro está cerrado y vacío,
 // cierra todas las bandejas para que cada moto termine al vaciar la suya. Si se detiene,
 // el libro abortado le devuelve std::nullopt y un pedido que ya no entra a una bandeja
 // abortada queda pendiente.
 void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
-                        const std::vector<std::shared_ptr<Courier>>& couriers, const Shutdown& shutdown)
+                        const std::vector<std::shared_ptr<Courier>>& couriers, Fleet& fleet, const Shutdown& shutdown)
 {
     std::size_t next = 0;
     while (std::optional<Order> order = book.take()) {
-        Courier& courier = *couriers[next];
-        next = (next + 1) % couriers.size();
+        const std::optional<std::size_t> chosen = fleet.reserve(next);
+        if (!chosen) {
+            break;  // detención mientras esperaba una moto con lugar: el pedido queda pendiente
+        }
+        Courier& courier = *couriers[*chosen];
+        next = (*chosen + 1) % couriers.size();
 
         Event e;
         e.t = clock.nowMs();
@@ -177,6 +185,7 @@ SimParams paramsFromConfig(const Config& c)
     p.orders = 0;  // los pedidos se crean de forma continua durante toda la ejecución
     p.meanIntervalMs = c.meanIntervalMs;
     p.burstMax = static_cast<int>(c.burstMax);
+    p.bagCapacity = static_cast<std::size_t>(c.bagCapacity);
     p.maxPending = static_cast<std::size_t>(c.maxPending);  // validado >= 0; 0 rechaza todo
     p.timeScale = c.timeScale;
     p.seed = static_cast<std::uint32_t>(c.seed);
@@ -256,10 +265,14 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         restaurants = std::move(all);
     }
 
+    // El cupo de las mochilas: lo reserva el despachador y lo libera cada moto.
+    auto fleet = std::make_shared<Fleet>(static_cast<std::size_t>(p.couriers),
+                                         p.bagCapacity.value_or(std::numeric_limits<std::size_t>::max()));
+
     std::vector<std::shared_ptr<Courier>> couriers;
     for (int i = 0; i < p.couriers; ++i) {
         couriers.push_back(std::make_shared<Courier>("c" + std::to_string(i), clock, log, shutdown, p.legMs, p.world,
-                                                     restaurants));
+                                                     restaurants, fleet, static_cast<std::size_t>(i)));
     }
     std::vector<std::thread> courierThreads;
     courierThreads.reserve(couriers.size());
@@ -270,8 +283,8 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
             running.fetch_sub(1);
         });
     }
-    std::thread dispatcher([&clock, &log, &book, &couriers, &shutdown, &running] {
-        dispatchRoundRobin(clock, log, book, couriers, shutdown);
+    std::thread dispatcher([&clock, &log, &book, &couriers, &fleet, &shutdown, &running] {
+        dispatchRoundRobin(clock, log, book, couriers, *fleet, shutdown);
         running.fetch_sub(1);
     });
 
@@ -333,6 +346,7 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
             log.write(e);
         });
         book.abort();
+        fleet->abort();  // el despachador puede estar esperando una moto con lugar
         for (const auto& courier : couriers) {
             courier->inbox().abort();
         }
