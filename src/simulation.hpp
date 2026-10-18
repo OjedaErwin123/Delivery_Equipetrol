@@ -45,6 +45,10 @@ struct SimParams {
     std::vector<Kitchen> kitchens;
     // Máximo de pedidos asignados (y sin entregar) por moto; sin valor = sin límite (pruebas).
     std::optional<std::size_t> bagCapacity;
+    // Con mapa, el despachador estima: espera las estimaciones hasta quoteTimeoutMs (tiempo REAL) y
+    // rechaza noCourier un pedido sin asignar a los acceptTimeoutMs (tiempo SIMULADO) de creado.
+    std::int64_t quoteTimeoutMs = 200;
+    std::int64_t acceptTimeoutMs = 600000;
     std::int64_t meanIntervalMs = 36000;  // tiempo simulado medio entre dos pedidos (con ráfagas también)
     int burstMax = 1;                     // cada llegada trae entre 1 y burstMax pedidos en el mismo instante
     std::optional<std::size_t> maxPending;  // límite del libro (queueFull); sin valor, sin límite

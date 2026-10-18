@@ -4,6 +4,8 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <future>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -13,12 +15,14 @@
 #include <thread>
 
 #include "courier.hpp"
+#include "estimate.hpp"
 #include "event_log.hpp"
 #include "fleet.hpp"
 #include "order_book.hpp"
 #include "road_graph.hpp"
 #include "shutdown.hpp"
 #include "sim_clock.hpp"
+#include "thread_pool.hpp"
 
 namespace {
 
@@ -47,10 +51,10 @@ struct Generated {
 // Registra un evento de pedido (orderCreated u orderRejected) salvo que la simulación ya haya
 // terminado: comprobar y registrar en una sola operación (ver Shutdown::unlessStopped).
 bool logOrderEvent(EventLog& log, const Shutdown& shutdown, const char* event, const Order& order,
-                   const char* reason)
+                   const char* reason, std::int64_t t)
 {
     Event e;
-    e.t = order.createdAtMs();
+    e.t = t;
     e.event = event;
     e.order = order.id();
     if (reason == nullptr) {
@@ -97,7 +101,7 @@ Generated generateOrders(const SimParams& p, const SimClock& clock, EventLog& lo
             Order order("o" + std::to_string(g.created), p.restaurants[r], p.destinations[d], plannedMs, prepMs);
 
             // Se registra antes de soltar el pedido: ningún evento suyo puede adelantarse.
-            if (!logOrderEvent(log, shutdown, "orderCreated", order, nullptr)) {
+            if (!logOrderEvent(log, shutdown, "orderCreated", order, nullptr, order.createdAtMs())) {
                 return g;
             }
             ++g.created;
@@ -124,7 +128,7 @@ Generated generateOrders(const SimParams& p, const SimClock& clock, EventLog& lo
             if (rejectedFor != nullptr) {
                 // Rechazado en el mismo instante. El pedido no entró al libro (submit no lo
                 // consumió); si ya se detuvo, no se registra y queda pendiente.
-                if (!logOrderEvent(log, shutdown, "orderRejected", order, rejectedFor)) {
+                if (!logOrderEvent(log, shutdown, "orderRejected", order, rejectedFor, order.createdAtMs())) {
                     return g;
                 }
                 ++g.rejected;
@@ -176,6 +180,97 @@ void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
     }
 }
 
+// Asignar `order` a `courier` (ya con su cupo reservado): la cocina empieza ahora. false si se
+// detuvo (el pedido queda pendiente).
+bool assignTo(Courier& courier, Order&& order, const SimClock& clock, EventLog& log, const Shutdown& shutdown)
+{
+    Event e;
+    e.t = clock.nowMs();
+    e.event = "orderAssigned";
+    e.order = order.id();
+    e.courier = courier.id();
+    order.markAssigned(e.t);
+    if (!shutdown.unlessStopped(e.t, [&log, &e] { log.write(e); })) {
+        return false;
+    }
+    return courier.assign(std::move(order)) == OrderBook::Submit::accepted;  // falla solo si se detiene
+}
+
+// Hilo despachador (con mapa): para cada pedido, en orden FIFO, estima con TODAS las motos con lugar
+// a la vez (una tarea por moto en el pool), espera las estimaciones hasta quoteTimeoutMs reales
+// (las tardías se ignoran; las que fallan se reportan en stderr y se descartan), elige la de menor
+// ETA (empate: la de menor índice) y revalida reservando el cupo de ESA moto (si se llenó entre
+// estimar y asignar, prueba la siguiente). Si la ronda no sirve, duerme hasta que alguna moto
+// libere un cupo o hasta el vencimiento; vencido (creación + acceptTimeoutMs), noCourier.
+// Las estimaciones trabajan sobre copias (plan de la moto, World de solo lectura): sin locks.
+// Devuelve cuántos rechazó por noCourier.
+int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log, OrderBook& book,
+                       const std::vector<std::shared_ptr<Courier>>& couriers, Fleet& fleet, ThreadPool& pool,
+                       const Shutdown& shutdown)
+{
+    int noCourier = 0;
+    while (std::optional<Order> order = book.take()) {
+        const std::int64_t deadline = order->createdAtMs() + p.acceptTimeoutMs;
+        bool assigned = false;
+        for (;;) {
+            const std::uint64_t seen = fleet.version();  // antes de estimar: un cupo liberado durante la ronda no se pierde
+            const std::int64_t now = clock.nowMs();
+            if (now >= deadline) {
+                break;
+            }
+            const std::vector<std::size_t> candidates = fleet.withSpace();
+            const PlannedOrder planned{order->restaurant(), order->destination(), now + order->prepMs(), false};
+            std::vector<std::future<std::int64_t>> etas;
+            for (std::size_t i : candidates) {
+                // Todo por valor: la tarea puede terminar tarde, cuando el despachador ya siguió.
+                etas.push_back(pool.submit([world = p.world, plan = couriers[i]->plan(), planned, now] {
+                    return estimateDelivery(*world, plan, planned, now);
+                }));
+            }
+            const auto quoteDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(p.quoteTimeoutMs);
+            std::vector<std::pair<std::int64_t, std::size_t>> ranked;  // (ETA, moto)
+            for (std::size_t k = 0; k < etas.size(); ++k) {
+                if (etas[k].wait_until(quoteDeadline) != std::future_status::ready) {
+                    continue;  // tardía: se ignora (termina en el pool y nadie la lee)
+                }
+                try {
+                    ranked.emplace_back(etas[k].get(), candidates[k]);
+                } catch (const std::exception& error) {  // el error cruzó de hilo por el future
+                    std::cerr << "delivery_sim: estimación fallida (pedido " << order->id() << ", moto "
+                              << couriers[candidates[k]]->id() << "): " << error.what() << "\n";
+                }
+            }
+            std::sort(ranked.begin(), ranked.end());
+            for (const auto& choice : ranked) {
+                if (fleet.tryReserve(choice.second)) {  // revalidar (check-then-act)
+                    if (!assignTo(*couriers[choice.second], std::move(*order), clock, log, shutdown)) {
+                        return noCourier;  // se detuvo
+                    }
+                    assigned = true;
+                    break;
+                }
+            }
+            if (assigned) {
+                break;
+            }
+            // Sin estimación usable o sin motos con lugar: dormir (sin CPU) hasta un cambio o el vencimiento.
+            if (!fleet.waitForChange(seen, clock.realTimeAt(deadline))) {
+                return noCourier;  // detención
+            }
+        }
+        if (!assigned) {
+            if (!logOrderEvent(log, shutdown, "orderRejected", *order, "noCourier", clock.nowMs())) {
+                return noCourier;
+            }
+            ++noCourier;
+        }
+    }
+    for (const auto& courier : couriers) {
+        courier->inbox().close();
+    }
+    return noCourier;
+}
+
 }  // namespace
 
 SimParams paramsFromConfig(const Config& c)
@@ -186,6 +281,8 @@ SimParams paramsFromConfig(const Config& c)
     p.meanIntervalMs = c.meanIntervalMs;
     p.burstMax = static_cast<int>(c.burstMax);
     p.bagCapacity = static_cast<std::size_t>(c.bagCapacity);
+    p.quoteTimeoutMs = c.quoteTimeoutMs;
+    p.acceptTimeoutMs = c.acceptTimeoutMs;
     p.maxPending = static_cast<std::size_t>(c.maxPending);  // validado >= 0; 0 rechaza todo
     p.timeScale = c.timeScale;
     p.seed = static_cast<std::uint32_t>(c.seed);
@@ -283,8 +380,20 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
             running.fetch_sub(1);
         });
     }
-    std::thread dispatcher([&clock, &log, &book, &couriers, &fleet, &shutdown, &running] {
-        dispatchRoundRobin(clock, log, book, couriers, *fleet, shutdown);
+    // Con mapa, el despachador estima en un thread pool de tantos hilos como núcleos (01: la
+    // decisión que depende del hardware). unique_ptr: el pool tiene un solo dueño y se destruye
+    // (join de sus hilos) al final de runSimulation, después del join del despachador.
+    std::unique_ptr<ThreadPool> pool;
+    if (p.world) {
+        pool = std::make_unique<ThreadPool>(ThreadPool::defaultSize());
+    }
+    int noCourier = 0;  // solo lo escribe el despachador; se lee después del join
+    std::thread dispatcher([&p, &clock, &log, &book, &couriers, &fleet, &pool, &shutdown, &noCourier, &running] {
+        if (pool) {
+            noCourier = dispatchByEstimate(p, clock, log, book, couriers, *fleet, *pool, shutdown);
+        } else {
+            dispatchRoundRobin(clock, log, book, couriers, *fleet, shutdown);  // pruebas sin mapa
+        }
         running.fetch_sub(1);
     });
 
@@ -366,7 +475,7 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
     // Después de los join: cada moto contó sus entregas sola; aquí se suman una vez.
     Summary s;
     s.created = generated.created;
-    s.rejected = generated.rejected;
+    s.rejected = generated.rejected + noCourier;
     std::int64_t total = 0;
     for (const auto& courier : couriers) {
         s.delivered += courier->delivered();
