@@ -1,7 +1,7 @@
 #include "fleet.hpp"
 
 Fleet::Fleet(std::size_t couriers, std::size_t bagCapacity)
-    : _capacity(bagCapacity), _assigned(couriers, 0), _broken(couriers, false)
+    : _capacity(bagCapacity), _assigned(couriers, 0), _broken(couriers, false), _retired(couriers, false)
 {
 }
 
@@ -63,6 +63,62 @@ bool Fleet::waitForChange(std::uint64_t seen, std::chrono::steady_clock::time_po
     return !_aborted;
 }
 
+bool Fleet::waitForChange(std::uint64_t seen)
+{
+    std::unique_lock<std::mutex> lock(_mutex);
+    _space.wait(lock, [this, seen] { return _aborted || _version != seen; });
+    return !_aborted;
+}
+
+void Fleet::beginTransfer()
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    ++_transfers;
+}
+
+void Fleet::endTransfer()
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        --_transfers;
+        ++_version;
+    }
+    _space.notify_all();  // el despachador vuelve a poder reservar
+}
+
+std::vector<std::size_t> Fleet::canReceive(std::size_t count, std::size_t except) const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    std::vector<std::size_t> out;
+    for (std::size_t i = 0; i < _assigned.size(); ++i) {
+        if (i != except && !_broken[i] && !_retired[i] && _assigned[i] + count <= _capacity) {
+            out.push_back(i);
+        }
+    }
+    return out;
+}
+
+void Fleet::retire(std::size_t courier)
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _retired[courier] = true;
+        ++_version;
+    }
+    _space.notify_all();
+}
+
+bool Fleet::othersAlive(std::size_t except) const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    for (std::size_t i = 0; i < _retired.size(); ++i) {
+        if (i != except && !_retired[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void Fleet::release(std::size_t courier)
 {
     {
@@ -70,15 +126,15 @@ void Fleet::release(std::size_t courier)
         --_assigned[courier];
         ++_version;
     }
-    // Solo el despachador espera en reserve: alcanza con despertar a uno.
-    _space.notify_one();
+    // Esperan el despachador y las motos averiadas que buscan receptor: se despierta a todos.
+    _space.notify_all();
 }
 
 bool Fleet::moveAssigned(std::size_t from, std::size_t to, std::size_t count, const std::function<bool()>& commit)
 {
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        if (_aborted || _broken[to] || _assigned[to] + count > _capacity || !commit()) {
+        if (_aborted || _broken[to] || _retired[to] || _assigned[to] + count > _capacity || !commit()) {
             return false;
         }
         _assigned[from] -= count;
@@ -96,7 +152,7 @@ void Fleet::setBroken(std::size_t courier, bool broken)
         _broken[courier] = broken;
         ++_version;
     }
-    _space.notify_one();
+    _space.notify_all();
 }
 
 void Fleet::abort()
