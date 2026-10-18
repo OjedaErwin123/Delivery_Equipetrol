@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 
+#include "estimate.hpp"
 #include "event_log.hpp"
 #include "fleet.hpp"
 #include "order_book.hpp"
@@ -50,6 +51,11 @@ public:
     Courier& operator=(const Courier&) = delete;
 
     const std::string& id() const { return _id; }
+
+    // Asignarle un pedido (lo llama el despachador, ya con su hora de asignación): lo anota en el
+    // plan y lo deja en la bandeja, así el plan siempre tiene TODOS los asignados aunque la moto
+    // todavía no los haya pasado a su mochila.
+    OrderBook::Submit assign(Order&& order);
     OrderBook& inbox() { return _inbox; }
 
     void run();
@@ -57,6 +63,9 @@ public:
     // El viaje actual (o la moto quieta), como copia: quien lo lee (la ventana, las estimaciones)
     // calcula la posición fuera del lock. Lo escribe solo el hilo de la moto, con _mutex.
     Trip trip() const;
+
+    // Su plan (viaje + pedidos asignados en orden FIFO), como copia: lo usan las estimaciones.
+    CourierPlan plan() const;
 
     // Estadísticas: solo las escribe el hilo de la moto (en run); leerlas después del join.
     int delivered() const { return _delivered; }
@@ -82,6 +91,9 @@ private:
     void collect(std::deque<Carried>& bag);  // pasa a la mochila lo que haya en la bandeja, sin esperar
     Leg pickUp(std::deque<Carried>& bag);     // la visita al restaurante del primer pedido de la mochila
     void finished();  // terminó un pedido (entregado o imposible): libera su cupo en la flota
+    // El plan acompaña a la mochila: la mochila es siempre el principio de plan.orders (mismo orden).
+    void markPicked(std::size_t i);  // el i-ésimo de la mochila ya se recogió
+    void dropFirst();                // el primero de la mochila terminó (entregado o imposible)
 
     const std::string _id;
     const SimClock& _clock;
@@ -95,8 +107,8 @@ private:
     OrderBook _inbox;
 
     std::size_t _node;              // dónde está; solo lo usa el hilo de la moto
-    mutable std::mutex _mutex;      // protege _trip, que leen otros hilos
-    Trip _trip;
+    mutable std::mutex _mutex;      // protege _plan, que leen otros hilos
+    CourierPlan _plan;
 
     int _delivered = 0;
     std::int64_t _totalDeliveryMs = 0;  // suma de (entregado - creado)
