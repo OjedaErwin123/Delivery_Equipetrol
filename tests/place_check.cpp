@@ -1,7 +1,8 @@
 // Prueba de los lugares a mitad de calle (donde quedará una moto averiada): un viaje dice en qué
 // punto de qué calle va en cada instante; desde un punto de una calle se sale respetando el sentido
-// único (por una de sentido único, solo hacia adelante); y un viaje y una estimación pueden salir
-// de ahí. Sale con 0 si todo está bien.
+// único (por una de sentido único, solo hacia adelante); un viaje y una estimación pueden salir
+// de ahí; y la distancia por calle HASTA un punto de una calle (con la que se elige quién va a
+// buscar a una moto averiada). Sale con 0 si todo está bien.
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -84,5 +85,16 @@ int main()
                                   kHandoverMs + static_cast<std::int64_t>(std::ceil(g.shortestPath(b, cc)->meters));
     std::cout << "estimación desde " << describe(g, onTwoWay) << ": " << eta << " (esperado " << expected << ")\n";
     ok &= check("la estimación sale del punto de la calle", eta == expected);
+
+    // 6. Hasta un punto de una calle: se entra por su inicio (o por su final si es de doble
+    //    sentido), o directo si se está en la misma calle y el sentido lo permite.
+    const double loop = (ab - 50) + bc + g.streetMeters(cc, d) + ad;  // b→c→d→a
+    ok &= check("desde a hasta 30 m de a sobre a→b: 30 m", near(*metersBetween(g, Place(a), Place(a, b, 30)), 30, 1e-6));
+    ok &= check("en la misma calle, hacia adelante: 20 m",
+                near(*metersBetween(g, Place(a, b, 10), Place(a, b, 30)), 20, 1e-6));
+    ok &= check("en la misma calle de sentido único pero ya pasado: da la vuelta",
+                near(*metersBetween(g, Place(a, b, 50), Place(a, b, 30)), loop + 30, 1e-6));
+    ok &= check("calle de doble sentido escrita al revés (d→a): 10 m",
+                near(*metersBetween(g, Place(d, a, ad - 20), Place(a, d, 30)), 10, 1e-6));
     return ok ? 0 : 1;
 }

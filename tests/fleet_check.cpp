@@ -1,6 +1,8 @@
 // Prueba del cupo de las mochilas (Fleet): reparto por turnos sin pasar bagCapacity, reserve
 // duerme cuando todas están llenas y despierta al liberarse un cupo, abort despierta al que
-// espera, y con un despachador y 4 motos en sus hilos nunca se pasa el cupo. Sale con 0 si todo está bien.
+// espera, y con un despachador y 4 motos en sus hilos nunca se pasa el cupo. Para los traspasos por
+// avería: mientras uno espera, el despachador no reserva (prioridad); receptores posibles (no
+// averiados, vivos, con lugar para todos); y quién sigue vivo. Sale con 0 si todo está bien.
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -95,6 +97,28 @@ int main()
         }
         ok &= check("estrés (2000 pedidos, 4 motos, cupo 3): nunca más que el cupo; al final todo liberado",
                     !overCapacity && allFree);
+    }
+
+    // Traspasos. Tres motos con cupo 3: la 0 con 2 pedidos (la averiada), la 1 con 2, la 2 vacía.
+    {
+        Fleet fleet(3, 3);
+        fleet.tryReserve(0);
+        fleet.tryReserve(0);
+        fleet.tryReserve(1);
+        fleet.tryReserve(1);
+        fleet.setBroken(0, true);
+        ok &= check("receptores para 2 pedidos: solo la que tiene lugar para los dos (la 2)",
+                    fleet.canReceive(2, 0) == std::vector<std::size_t>{2});
+        fleet.beginTransfer();
+        const bool blocked = fleet.withSpace().empty() && !fleet.tryReserve(2);
+        const std::uint64_t before = fleet.version();
+        fleet.endTransfer();
+        ok &= check("prioridad: mientras un traspaso espera, el despachador no reserva; al terminar, sí",
+                    blocked && fleet.version() != before && fleet.tryReserve(2));
+        fleet.retire(1);
+        fleet.retire(2);
+        ok &= check("vivas: retiradas la 1 y la 2, para la 0 no queda nadie; para la 1, la 0",
+                    !fleet.othersAlive(0) && fleet.othersAlive(1) && fleet.canReceive(1, 0).empty());
     }
     return ok ? 0 : 1;
 }
