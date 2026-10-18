@@ -48,7 +48,7 @@ int main()
             ok = check("bandeja abierta", false);
         }
     }
-    courier->inbox().close();
+    courier->close();
     std::thread worker(&Courier::run, courier);
     worker.join();
 

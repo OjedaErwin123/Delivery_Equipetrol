@@ -100,6 +100,6 @@ int main()
     ok &= check("assign: el plan ya lo tiene (restaurante, destino, lista en asignado + preparación)",
                 accepted && seen.orders.size() == 1 && seen.orders[0].restaurant == "r1" &&
                     seen.orders[0].destination == "a" && seen.orders[0].readyAtMs == 7000 && !seen.orders[0].picked);
-    courier.inbox().close();
+    courier.close();
     return ok ? 0 : 1;
 }
