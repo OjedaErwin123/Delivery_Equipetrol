@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -49,8 +50,9 @@
 //
 // Averías: al salir a cada viaje (con mapa) sortea si se avería, con su propio generador. Si toca,
 // se avería en un instante al azar del viaje: queda quieta en ese punto de la calle, la flota deja
-// de ofrecerla y se repara en kRepairMs; después sale de nuevo desde ahí (otro viaje, otro sorteo).
-// Provisorio: conserva sus pedidos (el traspaso a otra moto llega en otro PR).
+// de ofrecerla, traspasa toda su mochila (con `handOver`: elige el receptor y espera si hace falta)
+// y recién después se repara, en kRepairMs. Queda quieta ahí, sin pedidos.
+// Provisorio: los ya recogidos pasan al receptor como recogidos (el rescate llega en otro PR).
 constexpr std::int64_t kRepairMs = 300000;  // 5 min simulados
 
 class Courier {
@@ -78,6 +80,11 @@ public:
     void abort();
 
     void run();
+
+    // Quién recibe la mochila cuando esta moto se avería: lo fija quien crea las motos, ANTES de
+    // lanzar los hilos. Devuelve false si se detuvo. Sin esto (pruebas), la moto conserva sus pedidos.
+    void onBreakdown(std::function<bool(Courier&)> handOver) { _handOver = std::move(handOver); }
+    std::size_t index() const { return _index; }
 
     // El traspaso de TODA la mochila de esta moto a `to`, de una vez (todo o nada: ningún observador
     // ve un pedido en las dos mochilas ni en ninguna). Toma los dos mutex a la vez con
@@ -121,7 +128,8 @@ private:
     // El pedido `id` de la mochila (lo busca por id: otros hilos pueden agregar pedidos). Con _mutex.
     std::deque<Carried>::iterator find(const std::string& id);
 
-    enum class Leg { arrived, noPath, stopped };
+    // handedOver: se averió en el camino y traspasó lo que llevaba (ya no tiene ese pedido).
+    enum class Leg { arrived, noPath, stopped, handedOver };
     // Un tramo hasta `place` (id de restaurante o de nodo): por el camino mínimo si hay mapa, o
     // `legMs` si no. noPath: no hay camino desde donde está (solo con mapas de evaluadores).
     Leg travel(const std::string& place, bool isRestaurant);
@@ -129,7 +137,8 @@ private:
     // ¿Se avería en este viaje? Si sí, en qué instante (entre la salida y la llegada).
     std::optional<std::int64_t> drawBreakdown(const Trip& trip);
     // La avería en `at`: quieta donde iba, fuera de la flota, y la reparación. false si se detuvo.
-    bool breakDown(const Trip& trip, std::int64_t at);
+    enum class Breakdown { kept, handedOver, stopped };
+    Breakdown breakDown(const Trip& trip, std::int64_t at);
     Leg pickUp(const std::string& restaurant);  // la visita a `restaurant`: recoge todo lo suyo
     bool deliver(const std::string& id);        // registra la entrega y lo saca de la mochila
     void drop(const std::string& id);           // no puede llevarlo (sin camino): queda pendiente
@@ -154,6 +163,7 @@ private:
     Trip _trip;
     bool _closed = false;
     bool _aborted = false;
+    bool _exited = false;  // el hilo salió de run(): ya no puede recibir un traspaso
 
     int _delivered = 0;
     std::int64_t _totalDeliveryMs = 0;  // suma de (entregado - creado)
@@ -163,4 +173,5 @@ private:
     std::mt19937 _rng;  // propio de esta moto: solo lo usa su hilo (como el del generador de pedidos)
     int _breakdowns = 0;
     int _reassigned = 0;  // lo escribe solo el hilo que traspasa la mochila de esta moto
+    std::function<bool(Courier&)> _handOver;  // se fija antes de lanzar el hilo; después solo se lee
 };
