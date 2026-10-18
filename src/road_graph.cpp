@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <future>
 #include <limits>
 #include <queue>
 #include <utility>
@@ -43,8 +44,19 @@ RoadGraph::RoadGraph(const Config& config) : _out(config.nodes.size())
             _out[to].push_back(Edge{from, meters});
         }
     }
+    // Un Dijkstra desde cada restaurante, todos a la vez: std::async con política EXPLÍCITA
+    // (std::launch::async: cada uno en su hilo ya, no diferido hasta el get). Aquí sí sirve
+    // std::async: se esperan todos antes de seguir, así que el future que bloquea al destruirse
+    // no molesta (para las estimaciones del despachador, en cambio, se usa el pool).
+    // Sin data race: dijkstra() solo LEE _out, que ya está completo, y _fromRestaurant se escribe
+    // después, en este hilo, con los resultados de get() (que además relanza si algo falló).
+    std::vector<std::future<std::vector<double>>> searches;
     for (const RestaurantConfig& restaurant : config.restaurants) {
-        _fromRestaurant.push_back(dijkstra(_index.at(restaurant.node)).meters);
+        const std::size_t node = _index.at(restaurant.node);
+        searches.push_back(std::async(std::launch::async, [this, node] { return dijkstra(node).meters; }));
+    }
+    for (std::future<std::vector<double>>& search : searches) {
+        _fromRestaurant.push_back(search.get());
     }
 }
 
