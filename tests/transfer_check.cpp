@@ -74,7 +74,8 @@ int main()
                                                                     a.reassigned() == 2);
     }
 
-    // 2. Rechazos: B llena, C averiada, D cerrada. No se mueve nada ni se registra nada.
+    // 2. Rechazos: B llena, C averiada, D detenida (abort). No se mueve nada ni se registra nada.
+    //    (Cerrada sí recibe: solo significa que el despachador no le asigna más.)
     {
         std::ostringstream out;
         EventLog log(out);
@@ -87,11 +88,11 @@ int main()
         give(b, *fleet, 1, "y1");
         give(b, *fleet, 1, "y2");
         fleet->setBroken(2, true);
-        d.close();
+        d.abort();
         const bool refused = a.transferTo(b) == Courier::Handover::refused &&
                              a.transferTo(c) == Courier::Handover::refused &&
                              a.transferTo(d) == Courier::Handover::refused && a.transferTo(a) == Courier::Handover::refused;
-        ok &= check("receptor lleno, averiado o cerrado: rechazado, nada se mueve ni se registra",
+        ok &= check("receptor lleno, averiado o detenido: rechazado, nada se mueve ni se registra",
                     refused && destinations(a) == std::vector<std::string>{"x1"} && destinations(b).size() == 2 &&
                         fleet->assigned(0) == 1 && out.str().empty());
     }

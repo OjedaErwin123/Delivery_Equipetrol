@@ -109,13 +109,15 @@ int main()
                     always.summary.delivered == 0 && count(always, "orderAssigned") > 0);
     ok &= check("p = 1: averiada no hace nada hasta repararse (5 min simulados)", quietWhileBroken(always));
 
-    // 3. Probabilidad 0,3: averías y entregas; todo se entrega al final (la moto se repara y sigue).
-    const Run sometimes = simulate(smallTown(0.3, 0), 30);
+    // 3. Probabilidad 0,3: averías y entregas. Termina por tiempo: si las dos motos quedan averiadas
+    //    a la vez, cada una espera a la otra para traspasar (lo acordado) hasta la detención.
+    const Run sometimes = simulate(smallTown(0.3, 7200), 30);
     std::cout << "p = 0,3: " << toJson(sometimes.summary) << "\n";
-    ok &= check("p = 0,3: hay averías, contadas igual que en el log, y los 30 se entregan",
+    ok &= check("p = 0,3: hay averías y entregas, contadas igual que en el log",
                 sometimes.summary.breakdowns > 0 &&
                     sometimes.summary.breakdowns == count(sometimes, "courierBreakdown") &&
-                    sometimes.summary.delivered == 30);
+                    sometimes.summary.delivered > 0 &&
+                    sometimes.summary.delivered == count(sometimes, "orderDelivered"));
     ok &= check("p = 0,3: averiada no recoge ni entrega hasta repararse", quietWhileBroken(sometimes));
 
     // 4. Probabilidad 0: ninguna avería.
