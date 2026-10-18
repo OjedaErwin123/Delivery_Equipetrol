@@ -7,10 +7,12 @@
 
 Courier::Courier(std::string id, const SimClock& clock, EventLog& log, const Shutdown& shutdown,
                  std::int64_t legMs, std::shared_ptr<const World> world,
-                 std::shared_ptr<const Restaurants> restaurants, std::shared_ptr<Fleet> fleet, std::size_t index)
+                 std::shared_ptr<const Restaurants> restaurants, std::shared_ptr<Fleet> fleet, std::size_t index,
+                 double breakdownProbability, std::uint32_t seed)
     : _id(std::move(id)), _clock(clock), _log(log), _shutdown(shutdown), _legMs(legMs), _world(std::move(world)),
       _restaurants(std::move(restaurants)), _fleet(std::move(fleet)), _index(index),
-      _at(_world ? _world->startNode : 0), _plan(Trip::stay(_at, 0))
+      _at(_world ? _world->startNode : 0), _plan(Trip::stay(_at, 0)),
+      _breakdownProbability(breakdownProbability), _rng(seed)
 {
 }
 
@@ -70,20 +72,69 @@ Courier::Leg Courier::travel(const std::string& place, bool isRestaurant)
         return _shutdown.sleepUntil(_clock.realTimeIn(_legMs)) ? Leg::stopped : Leg::arrived;
     }
     const std::size_t target = isRestaurant ? _world->restaurantNode.at(place) : *_world->graph.nodeIndex(place);
-    const std::optional<Route> route = routeTo(_world->graph, _at, target);
-    if (!route) {
-        return Leg::noPath;
+    for (;;) {  // cada vuelta es un viaje: si se avería, se repara y sale de nuevo desde donde quedó
+        const std::optional<Route> route = routeTo(_world->graph, _at, target);
+        if (!route) {
+            return Leg::noPath;
+        }
+        // Se publica el viaje una vez y se duerme hasta la llegada: la posición en cada instante
+        // sale del Trip (función del tiempo), la moto no despierta para "avanzar". Si se va a
+        // averiar, se publica ya cortado en ese instante: nadie la ve pasar del punto de la avería.
+        const Trip trip(_world->graph, *route, _clock.nowMs(), _world->metersPerMs);
+        const std::optional<std::int64_t> breaksAt = drawBreakdown(trip);
+        publish(breaksAt ? trip.until(*breaksAt) : trip);
+        if (_shutdown.sleepUntil(_clock.realTimeAt(breaksAt ? *breaksAt : trip.arrivalMs()))) {
+            return Leg::stopped;
+        }
+        if (!breaksAt) {
+            _at = target;
+            publish(Trip::stay(_at, trip.arrivalMs()));
+            return Leg::arrived;
+        }
+        if (!breakDown(trip, *breaksAt)) {
+            return Leg::stopped;
+        }
     }
-    // Se publica el viaje una vez y se duerme hasta la llegada: la posición en cada instante
-    // sale del Trip (función del tiempo), la moto no despierta para "avanzar".
-    const Trip trip(_world->graph, *route, _clock.nowMs(), _world->metersPerMs);
-    publish(trip);
-    if (_shutdown.sleepUntil(_clock.realTimeAt(trip.arrivalMs()))) {
-        return Leg::stopped;
+}
+
+std::optional<std::int64_t> Courier::drawBreakdown(const Trip& trip)
+{
+    const std::int64_t duration = trip.arrivalMs() - trip.departMs();
+    if (_breakdownProbability <= 0 || duration <= 0) {
+        return std::nullopt;  // un tramo de largo cero no es un viaje
     }
-    _at = target;
-    publish(Trip::stay(_at, trip.arrivalMs()));
-    return Leg::arrived;
+    // Directo del mt19937 (no uniform_*_distribution: da valores distintos en libstdc++ y libc++).
+    const double u = static_cast<double>(_rng()) / 4294967296.0;  // en [0, 1)
+    if (u >= _breakdownProbability) {
+        return std::nullopt;
+    }
+    return trip.departMs() + static_cast<std::int64_t>(static_cast<std::uint64_t>(_rng()) %
+                                                       static_cast<std::uint64_t>(duration));
+}
+
+bool Courier::breakDown(const Trip& trip, std::int64_t at)
+{
+    _at = trip.placeAt(at);  // a mitad de una calle (o en un nodo, si justo pasaba por uno)
+    publish(Trip::stay(_at, at));
+    if (_fleet) {
+        _fleet->setBroken(_index, true);  // ya no es candidata del despachador
+    }
+    Event e;
+    e.t = at;
+    e.event = "courierBreakdown";
+    e.courier = _id;
+    if (!_shutdown.unlessStopped(at, [this, &e] { _log.write(e); })) {
+        return false;
+    }
+    ++_breakdowns;  // el mismo evento que se registró: el resumen coincide con el log
+    // La reparación: tiempo simulado, interrumpible por la detención y sin CPU.
+    if (_shutdown.sleepUntil(_clock.realTimeAt(at + kRepairMs))) {
+        return false;
+    }
+    if (_fleet) {
+        _fleet->setBroken(_index, false);
+    }
+    return true;
 }
 
 void Courier::collect(std::deque<Carried>& bag)

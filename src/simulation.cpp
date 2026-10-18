@@ -286,6 +286,7 @@ SimParams paramsFromConfig(const Config& c)
     p.maxPending = static_cast<std::size_t>(c.maxPending);  // validado >= 0; 0 rechaza todo
     p.timeScale = c.timeScale;
     p.seed = static_cast<std::uint32_t>(c.seed);
+    p.breakdownProbability = c.breakdownProbability;
     p.durationS = c.durationS;
 
     // Destino (decisión "C"): un nodo de la red que no sea de un restaurante. El formato no
@@ -369,7 +370,8 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
     std::vector<std::shared_ptr<Courier>> couriers;
     for (int i = 0; i < p.couriers; ++i) {
         couriers.push_back(std::make_shared<Courier>("c" + std::to_string(i), clock, log, shutdown, p.legMs, p.world,
-                                                     restaurants, fleet, static_cast<std::size_t>(i)));
+                                                     restaurants, fleet, static_cast<std::size_t>(i),
+                                                     p.breakdownProbability, p.seed + static_cast<std::uint32_t>(i)));
     }
     std::vector<std::thread> courierThreads;
     courierThreads.reserve(couriers.size());
@@ -481,6 +483,7 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         s.delivered += courier->delivered();
         total += courier->totalDeliveryMs();
         s.maxDeliveryMs = std::max(s.maxDeliveryMs, courier->maxDeliveryMs());
+        s.breakdowns += courier->breakdowns();
         s.deliveredPerCourier.emplace_back(courier->id(), courier->delivered());
     }
     s.avgDeliveryMs = s.delivered > 0 ? total / s.delivered : 0;
@@ -493,7 +496,8 @@ std::string toJson(const Summary& s)
                        ", \"delivered\": " + std::to_string(s.delivered) +
                        ", \"rejected\": " + std::to_string(s.rejected) +
                        ", \"pending\": " + std::to_string(s.created - s.delivered - s.rejected) +
-                       ", \"reassigned\": 0, \"breakdowns\": 0, \"avgDeliveryMs\": " + std::to_string(s.avgDeliveryMs) +
+                       ", \"reassigned\": 0, \"breakdowns\": " + std::to_string(s.breakdowns) +
+                       ", \"avgDeliveryMs\": " + std::to_string(s.avgDeliveryMs) +
                        ", \"maxDeliveryMs\": " + std::to_string(s.maxDeliveryMs) + ", \"deliveredPerCourier\": {";
     for (std::size_t i = 0; i < s.deliveredPerCourier.size(); ++i) {
         json += (i > 0 ? ", \"" : "\"") + s.deliveredPerCourier[i].first + "\": " +
