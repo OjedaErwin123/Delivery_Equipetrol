@@ -1,5 +1,6 @@
 #pragma once
 
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -22,23 +23,29 @@
 //   std::thread(&Courier::run, moto)   con `moto` un std::shared_ptr<Courier>
 // El hilo guarda su copia del shared_ptr, así el objeto vive mientras el hilo lo use.
 //
-// Recibe pedidos en su bandeja (un OrderBook: FIFO, segura entre hilos y con cierre)
-// y los entrega uno a uno. Sin pedidos, duerme en take() sin consumir CPU; termina
-// cuando le cierran la bandeja y la vacía. Los viajes se pueden interrumpir: si se pide
-// parar a mitad de un tramo, abandona el pedido (queda pendiente) y termina.
+// La mochila es un monitor (como 07/example_42): los pedidos asignados, en orden de asignación,
+// con el mutex de la moto y una variable de condición. El despachador los deja con assign(); el
+// hilo de la moto los entrega uno a uno. Sin pedidos, duerme sin consumir CPU; termina cuando le
+// cierran la mochila (close) y no le queda nada, o al abortar. Los viajes se pueden interrumpir:
+// si se pide parar a mitad de un tramo, abandona lo que lleva (queda pendiente) y termina.
+//
+// Que la mochila no sea local del hilo es lo que permite, en el traspaso por avería, mover sus
+// pedidos a otra moto de una vez. Por eso cada cambio de la mochila se registra en el log DENTRO
+// de la misma sección crítica: nadie ve un pedido entregado que sigue en la mochila. Orden de
+// locks: el de la moto, después Shutdown, después el log (nunca al revés).
 //
 // Con mapa (`world`), cada viaje recorre el camino mínimo por las calles a la velocidad de la
 // flota: la moto publica su Trip (con su lock) y duerme hasta llegar. Sin pedidos queda quieta
-// en el nodo donde entregó. Sin mapa (pruebas), cada tramo dura `legMs`.
+// donde entregó. Sin mapa (pruebas), cada tramo dura `legMs`.
 //
 // Con restaurantes, en el restaurante hace fila (ticket) hasta tomar un puesto, espera la comida
 // si no está lista y la entrega dura kHandoverMs, todo con el puesto tomado. Sin restaurantes
 // (pruebas), la recogida es instantánea.
 //
-// La mochila: la moto lleva hasta bagCapacity pedidos asignados (el cupo lo controla la flota).
-// Los entrega en el orden en que se los asignaron (FIFO). En cada visita a un restaurante recoge
-// todos los pedidos de su mochila de ese restaurante (un solo ticket), esperando en el puesto a
-// que esté lista la comida del último.
+// La mochila lleva hasta bagCapacity pedidos asignados (el cupo lo controla la flota). Los entrega
+// en el orden en que se los asignaron (FIFO). En cada visita a un restaurante recoge todos los
+// pedidos de su mochila de ese restaurante (un solo ticket), esperando en el puesto a que esté
+// lista la comida del último.
 //
 // Averías: al salir a cada viaje (con mapa) sortea si se avería, con su propio generador. Si toca,
 // se avería en un instante al azar del viaje: queda quieta en ese punto de la calle, la flota deja
@@ -62,11 +69,13 @@ public:
 
     const std::string& id() const { return _id; }
 
-    // Asignarle un pedido (lo llama el despachador, ya con su hora de asignación): lo anota en el
-    // plan y lo deja en la bandeja, así el plan siempre tiene TODOS los asignados aunque la moto
-    // todavía no los haya pasado a su mochila.
+    // Asignarle un pedido (lo llama el despachador, ya con su hora de asignación): entra al final de
+    // la mochila y despierta a la moto. closed si ya se cerró o abortó (el pedido no se mueve).
     OrderBook::Submit assign(Order&& order);
-    OrderBook& inbox() { return _inbox; }
+    // No habrá más asignaciones: la moto termina lo que tiene y sale.
+    void close();
+    // Detención: la moto deja lo que tenga (queda pendiente) y sale.
+    void abort();
 
     void run();
 
@@ -74,7 +83,7 @@ public:
     // calcula la posición fuera del lock. Lo escribe solo el hilo de la moto, con _mutex.
     Trip trip() const;
 
-    // Su plan (viaje + pedidos asignados en orden FIFO), como copia: lo usan las estimaciones.
+    // Su plan (viaje + pedidos de la mochila en orden FIFO), como copia: lo usan las estimaciones.
     CourierPlan plan() const;
 
     // Estadísticas: solo las escribe el hilo de la moto (en run); leerlas después del join.
@@ -87,12 +96,20 @@ private:
     // Registra el evento salvo que se haya pedido parar o `t` ya pase el fin; false si no lo registró.
     bool logEvent(const char* event, const Order& order, std::int64_t t, bool withRestaurant);
 
-    // Un pedido en la mochila: lo asignado y si ya se recogió. La mochila (un deque en run) es
-    // local del hilo de la moto: nadie más la toca, así que no necesita lock.
+    // Un pedido en la mochila: lo asignado y si ya se recogió.
     struct Carried {
         Order order;
         bool picked = false;
     };
+    // Lo que el hilo de la moto necesita saber del próximo pedido (una copia: se usa fuera del lock).
+    struct Next {
+        std::string id, restaurant, destination;
+        bool picked;
+    };
+    // Duerme sin CPU hasta tener un pedido; std::nullopt si se abortó, o se cerró y no queda nada.
+    std::optional<Next> waitForWork();
+    // El pedido `id` de la mochila (lo busca por id: otros hilos pueden agregar pedidos). Con _mutex.
+    std::deque<Carried>::iterator find(const std::string& id);
 
     enum class Leg { arrived, noPath, stopped };
     // Un tramo hasta `place` (id de restaurante o de nodo): por el camino mínimo si hay mapa, o
@@ -103,12 +120,10 @@ private:
     std::optional<std::int64_t> drawBreakdown(const Trip& trip);
     // La avería en `at`: quieta donde iba, fuera de la flota, y la reparación. false si se detuvo.
     bool breakDown(const Trip& trip, std::int64_t at);
-    void collect(std::deque<Carried>& bag);  // pasa a la mochila lo que haya en la bandeja, sin esperar
-    Leg pickUp(std::deque<Carried>& bag);     // la visita al restaurante del primer pedido de la mochila
+    Leg pickUp(const std::string& restaurant);  // la visita a `restaurant`: recoge todo lo suyo
+    bool deliver(const std::string& id);        // registra la entrega y lo saca de la mochila
+    void drop(const std::string& id);           // no puede llevarlo (sin camino): queda pendiente
     void finished();  // terminó un pedido (entregado o imposible): libera su cupo en la flota
-    // El plan acompaña a la mochila: la mochila es siempre el principio de plan.orders (mismo orden).
-    void markPicked(std::size_t i);  // el i-ésimo de la mochila ya se recogió
-    void dropFirst();                // el primero de la mochila terminó (entregado o imposible)
 
     const std::string _id;
     const SimClock& _clock;
@@ -119,11 +134,16 @@ private:
     const std::shared_ptr<const Restaurants> _restaurants;
     const std::shared_ptr<Fleet> _fleet;
     const std::size_t _index;  // su lugar en la flota
-    OrderBook _inbox;
 
-    Place _at;                      // dónde está (un nodo, o a mitad de una calle); solo lo usa el hilo de la moto
-    mutable std::mutex _mutex;      // protege _plan, que leen otros hilos
-    CourierPlan _plan;
+    Place _at;  // dónde está (un nodo, o a mitad de una calle); solo lo usa el hilo de la moto
+
+    // El monitor de la moto: _bag, _trip, _closed y _aborted solo se tocan con _mutex tomado.
+    mutable std::mutex _mutex;
+    std::condition_variable _work;  // hay un pedido nuevo, o se cerró / abortó
+    std::deque<Carried> _bag;
+    Trip _trip;
+    bool _closed = false;
+    bool _aborted = false;
 
     int _delivered = 0;
     std::int64_t _totalDeliveryMs = 0;  // suma de (entregado - creado)
