@@ -5,9 +5,10 @@
 #include <utility>
 
 Courier::Courier(std::string id, const SimClock& clock, EventLog& log, const Shutdown& shutdown,
-                 std::int64_t legMs, std::shared_ptr<const World> world)
+                 std::int64_t legMs, std::shared_ptr<const World> world,
+                 std::shared_ptr<const Restaurants> restaurants)
     : _id(std::move(id)), _clock(clock), _log(log), _shutdown(shutdown), _legMs(legMs), _world(std::move(world)),
-      _node(_world ? _world->startNode : 0), _trip(Trip::stay(_node, 0))
+      _restaurants(std::move(restaurants)), _node(_world ? _world->startNode : 0), _trip(Trip::stay(_node, 0))
 {
 }
 
@@ -58,11 +59,30 @@ void Courier::run()
         if (toRestaurant == Leg::noPath) {
             continue;
         }
-        // Un evento negado (se pidió parar, o su t ya pasó el fin) también corta: el pedido queda pendiente.
-        const std::int64_t pickedAt = _clock.nowMs();
-        if (!logEvent("pickupStarted", *order, pickedAt, true) || !logEvent("orderPickedUp", *order, pickedAt, true)) {
+        // En el restaurante: fila (ticket) hasta tomar un puesto. nullopt = se detuvo mientras esperaba.
+        // El Slot libera el puesto al destruirse (RAII): en cualquier return de aquí en adelante.
+        // (Slot es move-only sin asignación: el optional se construye directamente con el resultado.)
+        std::optional<Restaurant::Slot> slot =
+            _restaurants ? _restaurants->at(order->restaurant())->enter() : std::optional<Restaurant::Slot>();
+        if (_restaurants && !slot) {
             return;
         }
+        // Un evento negado (se pidió parar, o su t ya pasó el fin) también corta: el pedido queda pendiente.
+        const std::int64_t startedAt = _clock.nowMs();
+        if (!logEvent("pickupStarted", *order, startedAt, true)) {
+            return;
+        }
+        if (_restaurants) {
+            // Con el puesto tomado: espera la comida si no está lista, y la entrega dura kHandoverMs.
+            const std::int64_t handedAt = std::max(startedAt, order->readyAtMs()) + kHandoverMs;
+            if (_shutdown.sleepUntil(_clock.realTimeAt(handedAt))) {
+                return;
+            }
+        }
+        if (!logEvent("orderPickedUp", *order, _clock.nowMs(), true)) {
+            return;
+        }
+        slot.reset();  // libera el puesto: entra el ticket siguiente
 
         // Al cliente hay camino desde el restaurante (si no, el pedido habría salido unreachable).
         const Leg toCustomer = travel(order->destination(), false);

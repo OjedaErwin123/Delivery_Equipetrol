@@ -5,7 +5,13 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <memory>
 #include <string>
+#include <unordered_map>
+
+// Cuánto dura entregar la comida en el puesto: el enunciado dice que consume tiempo simulado y
+// la configuración no trae el valor (decisión del proyecto).
+constexpr std::int64_t kHandoverMs = 30000;
 
 // Un restaurante con `pickupSlots` puestos de recogida: un monitor (como 07/example_42).
 //
@@ -80,3 +86,7 @@ private:
     std::uint64_t _nowServing = 0;  // el próximo ticket que puede entrar
     bool _aborted = false;
 };
+
+// Los restaurantes de la simulación por id. El mapa se arma antes de lanzar hilos y no cambia;
+// cada Restaurant es un monitor que comparten las motos que llegan.
+using Restaurants = std::unordered_map<std::string, std::shared_ptr<Restaurant>>;

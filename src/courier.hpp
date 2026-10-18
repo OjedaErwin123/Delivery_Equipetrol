@@ -8,6 +8,7 @@
 
 #include "event_log.hpp"
 #include "order_book.hpp"
+#include "restaurant.hpp"
 #include "shutdown.hpp"
 #include "sim_clock.hpp"
 #include "travel.hpp"
@@ -24,12 +25,17 @@
 // Con mapa (`world`), cada viaje recorre el camino mínimo por las calles a la velocidad de la
 // flota: la moto publica su Trip (con su lock) y duerme hasta llegar. Sin pedidos queda quieta
 // en el nodo donde entregó. Sin mapa (pruebas), cada tramo dura `legMs`.
+//
+// Con restaurantes, en el restaurante hace fila (ticket) hasta tomar un puesto, espera la comida
+// si no está lista y la entrega dura kHandoverMs, todo con el puesto tomado. Sin restaurantes
+// (pruebas), la recogida es instantánea.
 class Courier {
 public:
     // `clock`, `log` y `shutdown` los crea quien crea las motos y viven hasta después del join.
     // `world` puede ser nullptr (pruebas sin mapa): entonces cada tramo dura `legMs`.
+    // `restaurants` puede ser nullptr (pruebas): entonces la recogida es instantánea.
     Courier(std::string id, const SimClock& clock, EventLog& log, const Shutdown& shutdown, std::int64_t legMs,
-            std::shared_ptr<const World> world = nullptr);
+            std::shared_ptr<const World> world = nullptr, std::shared_ptr<const Restaurants> restaurants = nullptr);
     Courier(const Courier&) = delete;
     Courier& operator=(const Courier&) = delete;
 
@@ -63,6 +69,7 @@ private:
     const Shutdown& _shutdown;
     const std::int64_t _legMs;  // sin mapa: duración simulada de cada tramo de viaje
     const std::shared_ptr<const World> _world;
+    const std::shared_ptr<const Restaurants> _restaurants;
     OrderBook _inbox;
 
     std::size_t _node;              // dónde está; solo lo usa el hilo de la moto

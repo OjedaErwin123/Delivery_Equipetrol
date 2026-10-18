@@ -29,6 +29,14 @@ std::int64_t nextIntervalMs(std::mt19937& rng, double meanMs)
     return static_cast<std::int64_t>(-meanMs * std::log(u));
 }
 
+// Entero uniforme en [min, max], directo del mt19937 (misma secuencia con cualquier compilador).
+std::int64_t uniformMs(std::mt19937& rng, std::int64_t min, std::int64_t max)
+{
+    const std::uint64_t span = static_cast<std::uint64_t>(max - min) + 1;
+    const std::uint64_t draw = (static_cast<std::uint64_t>(rng()) << 32) | rng();
+    return min + static_cast<std::int64_t>(draw % span);
+}
+
 struct Generated {
     int created = 0;
     int rejected = 0;
@@ -80,7 +88,11 @@ Generated generateOrders(const SimParams& p, const SimClock& clock, EventLog& lo
         for (int k = 0; k < burst; ++k) {
             const std::size_t r = rng() % p.restaurants.size();
             const std::size_t d = rng() % p.destinations.size();
-            Order order("o" + std::to_string(g.created), p.restaurants[r], p.destinations[d], plannedMs);
+            // La preparación se sortea aquí (uniforme en el rango del restaurante): es parte de la
+            // secuencia reproducible por semilla.
+            const std::int64_t prepMs =
+                p.kitchens.empty() ? 0 : uniformMs(rng, p.kitchens[r].prepMinMs, p.kitchens[r].prepMaxMs);
+            Order order("o" + std::to_string(g.created), p.restaurants[r], p.destinations[d], plannedMs, prepMs);
 
             // Se registra antes de soltar el pedido: ningún evento suyo puede adelantarse.
             if (!logOrderEvent(log, shutdown, "orderCreated", order, nullptr)) {
@@ -140,6 +152,7 @@ void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
         e.event = "orderAssigned";
         e.order = order->id();
         e.courier = courier.id();
+        order->markAssigned(e.t);  // la cocina empieza ahora
         if (!shutdown.unlessStopped(e.t, [&log, &e] { log.write(e); })) {
             break;  // se detuvo (o su t ya pasó el fin): el pedido queda pendiente
         }
@@ -175,6 +188,7 @@ SimParams paramsFromConfig(const Config& c)
     p.restaurants.clear();
     for (const RestaurantConfig& r : c.restaurants) {
         p.restaurants.push_back(r.id);
+        p.kitchens.push_back({static_cast<std::size_t>(r.pickupSlots), r.prepMinMs, r.prepMaxMs});
         restaurantNodes.insert(r.node);
     }
     p.destinations.clear();
@@ -232,9 +246,20 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
 
     // Cada moto la comparten su hilo y el despachador: shared_ptr garantiza que vive
     // mientras alguno la use.
+    // Los restaurantes con sus puestos (monitores que comparten las motos que llegan).
+    std::shared_ptr<const Restaurants> restaurants;
+    if (!p.kitchens.empty()) {
+        auto all = std::make_shared<Restaurants>();
+        for (std::size_t r = 0; r < p.restaurants.size(); ++r) {
+            all->emplace(p.restaurants[r], std::make_shared<Restaurant>(p.restaurants[r], p.kitchens[r].pickupSlots));
+        }
+        restaurants = std::move(all);
+    }
+
     std::vector<std::shared_ptr<Courier>> couriers;
     for (int i = 0; i < p.couriers; ++i) {
-        couriers.push_back(std::make_shared<Courier>("c" + std::to_string(i), clock, log, shutdown, p.legMs, p.world));
+        couriers.push_back(std::make_shared<Courier>("c" + std::to_string(i), clock, log, shutdown, p.legMs, p.world,
+                                                     restaurants));
     }
     std::vector<std::thread> courierThreads;
     courierThreads.reserve(couriers.size());
@@ -310,6 +335,11 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         book.abort();
         for (const auto& courier : couriers) {
             courier->inbox().abort();
+        }
+        if (restaurants) {
+            for (const auto& restaurant : *restaurants) {
+                restaurant.second->abort();  // despierta a las motos que hacen fila
+            }
         }
     }
 
