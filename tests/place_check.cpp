@@ -96,5 +96,17 @@ int main()
                 near(*metersBetween(g, Place(a, b, 50), Place(a, b, 30)), loop + 30, 1e-6));
     ok &= check("calle de doble sentido escrita al revés (d→a): 10 m",
                 near(*metersBetween(g, Place(d, a, ad - 20), Place(a, d, 30)), 10, 1e-6));
+
+    // 7. Un viaje HASTA un punto de una calle (el de quien va a buscar a una moto averiada).
+    const Place spot(a, b, 40);
+    const Trip toSpot(g, *routeTo(g, Place(a), spot), 0, 1.0);
+    const Coordinates end = toSpot.positionAt(g, 1000), atSpot = coordinatesOf(g, spot);
+    ok &= check("de a hasta 40 m sobre a→b: 40 ms, termina y se dibuja en el punto",
+                toSpot.arrivalMs() == 40 && toSpot.to() == spot && toSpot.placeAt(toSpot.arrivalMs()) == spot &&
+                    near(end.lat, atSpot.lat, 1e-12) && near(end.lon, atSpot.lon, 1e-12));
+    const Trip sameStreet(g, *routeTo(g, Place(a, d, 50), Place(a, d, 20)), 0, 1.0);
+    const Coordinates halfway = sameStreet.positionAt(g, 15), atThirtyFive = coordinatesOf(g, Place(a, d, 35));
+    ok &= check("en la misma calle de doble sentido, directo hacia atrás (30 ms, por la calle)",
+                sameStreet.arrivalMs() == 30 && near(halfway.lat, atThirtyFive.lat, 1e-12) && near(halfway.lon, atThirtyFive.lon, 1e-12));
     return ok ? 0 : 1;
 }
