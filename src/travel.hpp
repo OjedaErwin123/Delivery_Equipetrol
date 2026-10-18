@@ -54,6 +54,11 @@ struct Route {
 // está (por una calle a→b de sentido único solo se sale por b). std::nullopt si no hay camino.
 std::optional<Route> routeTo(const RoadGraph& graph, const Place& from, std::size_t to);
 
+// Metros del recorrido más corto de `from` a `to`, cuando `to` puede estar a mitad de una calle a→b:
+// se entra por a, o también por b si la calle es de doble sentido (o directo, si los dos están en
+// la misma calle y el sentido lo permite). std::nullopt si no hay camino.
+std::optional<double> metersBetween(const RoadGraph& graph, const Place& from, const Place& to);
+
 // Un viaje por las calles: el recorrido, la hora de salida y la velocidad. La moto lo publica una
 // vez por viaje y duerme hasta llegar; la posición en cualquier instante es una función pura del
 // tiempo (positionAt), así que quien la necesite (la ventana en cada frame, las estimaciones) la

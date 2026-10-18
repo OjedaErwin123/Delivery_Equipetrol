@@ -58,6 +58,43 @@ std::optional<Route> routeTo(const RoadGraph& graph, const Place& from, std::siz
     return best;
 }
 
+std::optional<double> metersBetween(const RoadGraph& graph, const Place& from, const Place& to)
+{
+    if (to.isNode()) {
+        const std::optional<Route> route = routeTo(graph, from, to.a);
+        return route ? std::optional<double>(route->meters) : std::nullopt;
+    }
+    const double street = graph.streetMeters(to.a, to.b);
+    const bool twoWay = graph.hasStreet(to.b, to.a);
+    std::optional<double> best;
+    const auto consider = [&best](double meters) {
+        if (!best || meters < *best) {
+            best = meters;
+        }
+    };
+    // En la misma calle: el mismo punto puede estar escrito como a→b o como b→a.
+    std::optional<double> fromOnStreet;
+    if (from.a == to.a && from.b == to.b) {
+        fromOnStreet = from.meters;
+    } else if (!from.isNode() && from.a == to.b && from.b == to.a) {
+        fromOnStreet = street - from.meters;
+    }
+    if (fromOnStreet && *fromOnStreet <= to.meters) {
+        consider(to.meters - *fromOnStreet);  // hacia adelante por a→b
+    } else if (fromOnStreet && twoWay) {
+        consider(*fromOnStreet - to.meters);  // hacia atrás por b→a
+    }
+    if (const std::optional<Route> viaA = routeTo(graph, from, to.a)) {
+        consider(viaA->meters + to.meters);
+    }
+    if (twoWay) {
+        if (const std::optional<Route> viaB = routeTo(graph, from, to.b)) {
+            consider(viaB->meters + street - to.meters);
+        }
+    }
+    return best;
+}
+
 Trip Trip::stay(const Place& place, std::int64_t sinceMs)
 {
     Trip trip;
