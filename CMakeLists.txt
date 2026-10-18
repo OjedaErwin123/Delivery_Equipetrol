@@ -143,6 +143,11 @@ add_executable(fleet_check tests/fleet_check.cpp src/fleet.cpp src/order_book.cp
 delivery_target_options(fleet_check)
 add_test(NAME fleet_check COMMAND fleet_check)
 
+add_executable(bag_check tests/bag_check.cpp src/courier.cpp src/travel.cpp src/restaurant.cpp src/fleet.cpp
+               src/road_graph.cpp src/order_book.cpp src/event_log.cpp)
+delivery_target_options(bag_check)
+add_test(NAME bag_check COMMAND bag_check)
+
 add_executable(restaurant_check tests/restaurant_check.cpp src/restaurant.cpp)
 delivery_target_options(restaurant_check)
 add_test(NAME restaurant_check COMMAND restaurant_check)

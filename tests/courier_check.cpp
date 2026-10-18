@@ -1,5 +1,5 @@
 // Prueba de la moto: corre en su propio hilo, entrega lo que recibe en su bandeja
-// en orden de llegada, registra sus eventos y termina cuando le cierran la bandeja.
+// en orden de asignación, registra sus eventos y termina cuando le cierran la bandeja.
 // Sale con 0 si todo está bien.
 #include <cstdint>
 #include <iostream>
@@ -44,33 +44,42 @@ int main()
     courier->inbox().close();
     worker.join();
 
-    // Cada pedido: pickupStarted, orderPickedUp, orderDelivered, en ese orden y con la
-    // moto y el restaurante correctos. Los pedidos, en orden de llegada (FIFO).
-    std::vector<std::string> lines;
-    std::istringstream in(out.str());
-    for (std::string line; std::getline(in, line);) {
-        lines.push_back(line);
-    }
-    const char* expected[] = {"pickupStarted", "orderPickedUp", "orderDelivered"};
-    bool sequence = lines.size() == 3 * kOrders;
-    bool timeForward = true;
+    // Cada pedido: pickupStarted, orderPickedUp, orderDelivered, en ese orden y con la moto y el
+    // restaurante correctos. Los eventos de pedidos distintos pueden intercalarse (la moto recoge
+    // juntos los de un mismo restaurante), pero las ENTREGAS salen en orden de asignación (FIFO).
+    std::vector<std::vector<std::string>> perOrder(kOrders);  // eventos de cada pedido, en orden
+    std::vector<int> deliveredOrder;
     std::int64_t total = 0;
     std::int64_t previous = 0;
-    for (std::size_t k = 0; sequence && k < lines.size(); ++k) {
-        const int i = static_cast<int>(k / 3);
-        const std::string& line = lines[k];
-        sequence = field(line, "event") == expected[k % 3] && field(line, "order") == "o" + std::to_string(i) &&
-                   field(line, "courier") == "c0" &&
-                   field(line, "restaurant") == (k % 3 == 2 ? "" : "r" + std::to_string(i % 3));
+    bool timeForward = true;
+    bool fields = true;
+    int lines = 0;
+    std::istringstream in(out.str());
+    for (std::string line; std::getline(in, line); ++lines) {
+        const int i = std::stoi(field(line, "order").substr(1));
+        const std::string event = field(line, "event");
+        perOrder[i].push_back(event);
+        fields = fields && field(line, "courier") == "c0" &&
+                 field(line, "restaurant") == (event == "orderDelivered" ? "" : "r" + std::to_string(i % 3));
         timeForward = timeForward && timeOf(line) >= previous;
         previous = timeOf(line);
-        if (k % 3 == 2) {
+        if (event == "orderDelivered") {
+            deliveredOrder.push_back(i);
             total += timeOf(line) - createdAt[i];
         }
     }
+    bool sequence = fields && lines == 3 * kOrders;
+    for (const auto& events : perOrder) {
+        sequence = sequence && events == std::vector<std::string>{"pickupStarted", "orderPickedUp", "orderDelivered"};
+    }
+    bool fifo = static_cast<int>(deliveredOrder.size()) == kOrders;
+    for (int k = 0; fifo && k < kOrders; ++k) {
+        fifo = deliveredOrder[k] == k;
+    }
 
-    std::cout << "eventos registrados: " << lines.size() << " de " << 3 * kOrders << "\n";
-    ok &= check("tres eventos por pedido, en orden, pedidos FIFO", sequence);
+    std::cout << "eventos registrados: " << lines << " de " << 3 * kOrders << "\n";
+    ok &= check("tres eventos por pedido, en orden", sequence);
+    ok &= check("entregas en orden de asignación (FIFO)", fifo);
     ok &= check("el tiempo nunca retrocede", timeForward);
     ok &= check("entregas contadas", courier->delivered() == kOrders);
     ok &= check("tiempo de entrega igual al del log", courier->totalDeliveryMs() == total);
