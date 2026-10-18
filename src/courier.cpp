@@ -34,7 +34,7 @@ CourierPlan Courier::plan() const
     std::lock_guard<std::mutex> lock(_mutex);
     CourierPlan plan(_trip);
     for (const Carried& c : _bag) {
-        plan.orders.push_back({c.order.restaurant(), c.order.destination(), c.order.readyAtMs(), c.picked});
+        plan.orders.push_back({c.order.restaurant(), c.order.destination(), c.order.readyAtMs(), c.picked, c.fetchAt});
     }
     return plan;
 }
@@ -46,7 +46,7 @@ OrderBook::Submit Courier::assign(Order&& order)
         if (_closed || _aborted) {
             return OrderBook::Submit::closed;
         }
-        _bag.push_back({std::move(order), false});
+        _bag.emplace_back(std::move(order));
     }
     _work.notify_one();  // solo el hilo de la moto espera en _work
     return OrderBook::Submit::accepted;
@@ -80,7 +80,7 @@ std::optional<Courier::Next> Courier::waitForWork()
         return std::nullopt;
     }
     const Carried& first = _bag.front();
-    return Next{first.order.id(), first.order.restaurant(), first.order.destination(), first.picked};
+    return Next{first.order.id(), first.order.restaurant(), first.order.destination(), first.picked, first.fetchAt};
 }
 
 std::deque<Courier::Carried>::iterator Courier::find(const std::string& id)
@@ -121,6 +121,14 @@ Courier::Handover Courier::transferTo(Courier& to)
                 stopped = true;
                 return false;
             }
+            // La comida ya recogida se queda aquí, en el punto de la avería: el receptor la viene a buscar.
+            for (Carried& c : _bag) {
+                if (c.picked && !c.fetchAt) {
+                    c.fetchAt = _trip.to();
+                    c.foodWith = this;
+                    ++_foodLeft;
+                }
+            }
             for (auto it = _bag.rbegin(); it != _bag.rend(); ++it) {
                 to._bag.push_front(std::move(*it));  // al principio, en el mismo orden (los Order se mueven: 02)
             }
@@ -143,12 +151,55 @@ void Courier::publish(const Trip& trip)
     _trip = trip;
 }
 
+void Courier::foodCollected(int count)
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _foodLeft -= count;
+    }
+    _work.notify_all();  // la moto averiada espera en _work a que le retiren toda la comida
+}
+
 Courier::Leg Courier::travel(const std::string& place, bool isRestaurant)
 {
     if (!_world) {
         return _shutdown.sleepUntil(_clock.realTimeIn(_legMs)) ? Leg::stopped : Leg::arrived;
     }
-    const std::size_t target = isRestaurant ? _world->restaurantNode.at(place) : *_world->graph.nodeIndex(place);
+    return travelTo(isRestaurant ? _world->restaurantNode.at(place) : *_world->graph.nodeIndex(place));
+}
+
+Courier::Leg Courier::rescue(const Place& spot)
+{
+    const Leg leg = travelTo(spot);
+    if (leg != Leg::arrived) {
+        return leg;
+    }
+    // Pasar la comida de una moto a la otra: tiempo simulado, interrumpible.
+    if (_shutdown.sleepUntil(_clock.realTimeIn(kRescueMs))) {
+        return Leg::stopped;
+    }
+    std::vector<Courier*> owners;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        for (Carried& c : _bag) {
+            if (c.fetchAt && *c.fetchAt == spot) {  // toda la comida de ese punto, de una vez
+                c.fetchAt.reset();
+                owners.push_back(c.foodWith);
+                c.foodWith = nullptr;
+            }
+        }
+    }
+    for (Courier* owner : owners) {
+        owner->foodCollected(1);  // fuera del lock de esta moto: nunca dos mutex de moto a la vez aquí
+    }
+    return Leg::arrived;
+}
+
+Courier::Leg Courier::travelTo(const Place& target)
+{
+    if (!_world) {
+        return _shutdown.sleepUntil(_clock.realTimeIn(_legMs)) ? Leg::stopped : Leg::arrived;
+    }
     for (;;) {  // cada vuelta es un viaje: si se avería, se repara y sale de nuevo desde donde quedó
         const std::optional<Route> route = routeTo(_world->graph, _at, target);
         if (!route) {
@@ -212,6 +263,14 @@ Courier::Breakdown Courier::breakDown(const Trip& trip, std::int64_t at)
     // Traspasa toda la mochila (espera receptor si hace falta). La reparación empieza después.
     if (_handOver && !_handOver(*this)) {
         return Breakdown::stopped;
+    }
+    {
+        // La reparación empieza cuando le retiraron toda la comida que ya había recogido (sin CPU).
+        std::unique_lock<std::mutex> lock(_mutex);
+        _work.wait(lock, [this] { return _aborted || _foodLeft == 0; });
+        if (_aborted) {
+            return Breakdown::stopped;
+        }
     }
     bool kept = false;
     {
@@ -314,6 +373,17 @@ void Courier::run()
         const std::optional<Next> next = waitForWork();
         if (!next) {
             break;
+        }
+        if (next->picked && next->fetchAt) {
+            // Heredado de una moto averiada: a buscar la comida al punto de la avería.
+            const Leg leg = rescue(*next->fetchAt);
+            if (leg == Leg::stopped) {
+                break;
+            }
+            if (leg == Leg::noPath) {
+                drop(next->id);  // solo con mapas raros: queda pendiente
+            }
+            continue;
         }
         if (!next->picked) {
             // Falta recogerlo: a su restaurante. Después vuelve a mirar la mochila desde el principio.
