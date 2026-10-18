@@ -14,6 +14,7 @@
 #include "courier.hpp"
 #include "event_log.hpp"
 #include "order_book.hpp"
+#include "road_graph.hpp"
 #include "shutdown.hpp"
 #include "sim_clock.hpp"
 
@@ -77,31 +78,42 @@ Generated generateOrders(const SimParams& p, const SimClock& clock, EventLog& lo
         }
         const int burst = 1 + static_cast<int>(rng() % static_cast<std::uint32_t>(p.burstMax));
         for (int k = 0; k < burst; ++k) {
-            const std::string& restaurant = p.restaurants[rng() % p.restaurants.size()];
-            const std::string& destination = p.destinations[rng() % p.destinations.size()];
-            Order order("o" + std::to_string(g.created), restaurant, destination, plannedMs);
+            const std::size_t r = rng() % p.restaurants.size();
+            const std::size_t d = rng() % p.destinations.size();
+            Order order("o" + std::to_string(g.created), p.restaurants[r], p.destinations[d], plannedMs);
 
             // Se registra antes de soltar el pedido: ningún evento suyo puede adelantarse.
             if (!logOrderEvent(log, shutdown, "orderCreated", order, nullptr)) {
                 return g;
             }
             ++g.created;
-            switch (book.submit(std::move(order))) {
-            case OrderBook::Submit::accepted:
-                break;
-            case OrderBook::Submit::full:
-                // El libro tiene maxPending esperando: rechazado en el mismo instante. El pedido no
-                // entró al libro (submit no lo consumió); si ya se detuvo, queda pendiente.
-                if (!logOrderEvent(log, shutdown, "orderRejected", order, "queueFull")) {
+            // El motivo del rechazo, si lo hay. unreachable se mira antes que queueFull: es una
+            // propiedad fija del pedido (no depende de cuánto ocupa el libro en este instante),
+            // así el motivo es el mismo en cada corrida.
+            const char* rejectedFor = nullptr;
+            if (!p.reachable.empty() && !p.reachable[r][d]) {
+                rejectedFor = "unreachable";
+            } else {
+                switch (book.submit(std::move(order))) {
+                case OrderBook::Submit::accepted:
+                    break;
+                case OrderBook::Submit::full:
+                    rejectedFor = "queueFull";  // el libro tiene maxPending esperando
+                    break;
+                case OrderBook::Submit::closed:
+                    if (shutdown.requested()) {
+                        return g;  // ya creado y registrado: cuenta como pendiente
+                    }
+                    throw std::logic_error("el libro solo se cierra al final o al detener");
+                }
+            }
+            if (rejectedFor != nullptr) {
+                // Rechazado en el mismo instante. El pedido no entró al libro (submit no lo
+                // consumió); si ya se detuvo, no se registra y queda pendiente.
+                if (!logOrderEvent(log, shutdown, "orderRejected", order, rejectedFor)) {
                     return g;
                 }
                 ++g.rejected;
-                break;
-            case OrderBook::Submit::closed:
-                if (shutdown.requested()) {
-                    return g;  // ya creado y registrado: cuenta como pendiente
-                }
-                throw std::logic_error("el libro solo se cierra al final o al detener");
             }
             if (p.orders > 0 && g.created == p.orders) {
                 book.close();  // tope de las pruebas: no llegarán más
@@ -177,6 +189,16 @@ SimParams paramsFromConfig(const Config& c)
     if (p.destinations.empty()) {
         for (const NodeConfig& n : c.nodes) {
             p.destinations.push_back(n.id);
+        }
+    }
+
+    // unreachable: sin camino dirigido del nodo del restaurante al destino. El grafo ya precalculó
+    // las distancias desde cada restaurante (un Dijkstra por restaurante); aquí solo se consulta.
+    const RoadGraph graph(c);
+    p.reachable.assign(p.restaurants.size(), std::vector<bool>(p.destinations.size()));
+    for (std::size_t r = 0; r < p.restaurants.size(); ++r) {
+        for (std::size_t d = 0; d < p.destinations.size(); ++d) {
+            p.reachable[r][d] = graph.reachableFromRestaurant(r, *graph.nodeIndex(p.destinations[d]));
         }
     }
     return p;

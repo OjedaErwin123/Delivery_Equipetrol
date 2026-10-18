@@ -28,6 +28,9 @@ struct SimParams {
     int orders = 0;                       // tope de pedidos creados; 0 = sin tope (hasta la detención)
     std::vector<std::string> restaurants = numberedIds("r", 7);  // de dónde salen los pedidos
     std::vector<std::string> destinations = numberedIds("n", 154);  // puntos de entrega posibles
+    // reachable[r][d]: ¿hay camino por las calles del restaurante r al destino d? Vacío = todo
+    // alcanzable (las pruebas sin mapa). Se arma antes de lanzar hilos y nadie lo modifica después.
+    std::vector<std::vector<bool>> reachable;
     std::int64_t meanIntervalMs = 36000;  // tiempo simulado medio entre dos pedidos (con ráfagas también)
     int burstMax = 1;                     // cada llegada trae entre 1 y burstMax pedidos en el mismo instante
     std::optional<std::size_t> maxPending;  // límite del libro (queueFull); sin valor, sin límite
@@ -39,7 +42,8 @@ struct SimParams {
 
 // Los parámetros que salen del archivo de configuración (ya validado): motos, semilla,
 // intervalo medio, ráfagas, límite del libro, duración y escala de tiempo, los restaurantes,
-// y como destinos todos los nodos que no son de un restaurante. Sin tope de pedidos: se crean hasta la detención.
+// y como destinos todos los nodos que no son de un restaurante, con la tabla de alcanzabilidad
+// (grafo vial: sentido único respetado). Sin tope de pedidos: se crean hasta la detención.
 // Los tramos siguen siendo fijos (legMs) hasta que las motos se muevan por el grafo.
 SimParams paramsFromConfig(const Config& config);
 
