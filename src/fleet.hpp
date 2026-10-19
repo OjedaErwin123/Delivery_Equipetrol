@@ -19,6 +19,8 @@
 // (check-then-act). _assigned, _broken y _aborted solo se tocan con _mutex tomado: no hay data race.
 //
 // Una moto averiada no tiene lugar para nadie: no es candidata ni se le puede reservar cupo.
+// Prioridad de los traspasos: mientras una moto averiada busca receptor (beginTransfer ..
+// endTransfer), el despachador no reserva en ninguna moto, así el traspaso no pasa hambre.
 class Fleet {
 public:
     Fleet(std::size_t couriers, std::size_t bagCapacity);
@@ -43,6 +45,19 @@ public:
     // aviso que llegó mientras estimaba, y no gira reintentando. false si se abortó.
     std::uint64_t version() const;
     bool waitForChange(std::uint64_t seen, std::chrono::steady_clock::time_point deadline);
+    bool waitForChange(std::uint64_t seen);  // sin plazo (la moto averiada que espera receptor)
+
+    // Traspasos: una moto averiada empieza a buscar receptor / ya traspasó (o se detuvo).
+    void beginTransfer();
+    void endTransfer();
+    // Las motos (distintas de `except`) que podrían recibir `count` pedidos: no averiadas, vivas y con
+    // lugar para todos. Una foto, como withSpace: se revalida al traspasar.
+    std::vector<std::size_t> canReceive(std::size_t count, std::size_t except) const;
+    // La moto terminó su hilo: ya no recibe nada.
+    void retire(std::size_t courier);
+    // ¿Queda alguna otra moto que pueda trabajar (viva y no averiada)? Si no, una averiada que busca
+    // receptor no lo va a encontrar nunca: se repara igual y sigue con sus pedidos.
+    bool othersWorking(std::size_t except) const;
 
     // La moto `courier` terminó un pedido (lo entregó o no pudo tomarlo): libera su cupo.
     void release(std::size_t courier);
@@ -62,13 +77,18 @@ public:
     std::size_t assigned(std::size_t courier) const;
 
 private:
-    bool hasSpace(std::size_t courier) const { return !_broken[courier] && _assigned[courier] < _capacity; }
+    bool hasSpace(std::size_t courier) const
+    {
+        return _transfers == 0 && !_broken[courier] && !_retired[courier] && _assigned[courier] < _capacity;
+    }
 
     const std::size_t _capacity;
     mutable std::mutex _mutex;
     std::condition_variable _space;
     std::vector<std::size_t> _assigned;
     std::vector<bool> _broken;
+    std::vector<bool> _retired;
+    std::size_t _transfers = 0;  // motos averiadas buscando receptor
     bool _aborted = false;
     std::uint64_t _version = 0;
 };

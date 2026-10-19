@@ -39,7 +39,7 @@ std::optional<Route> routeTo(const RoadGraph& graph, const Place& from, std::siz
             return std::nullopt;
         }
         const double meters = path->meters;
-        return Route{from, std::move(*path), meters};
+        return Route{from, std::move(*path), meters, std::nullopt};
     }
     // A mitad de la calle a→b: sale por b (la arista a→b existe: por ahí venía) o, si la calle es
     // de doble sentido, también por a. Gana el más corto; en empate, hacia adelante.
@@ -48,7 +48,7 @@ std::optional<Route> routeTo(const RoadGraph& graph, const Place& from, std::siz
         std::optional<RoadGraph::Path> path = graph.shortestPath(exit, to);
         if (path && (!best || untilExit + path->meters < best->meters)) {
             const double meters = untilExit + path->meters;
-            best = Route{from, std::move(*path), meters};
+            best = Route{from, std::move(*path), meters, std::nullopt};
         }
     };
     consider(from.b, graph.streetMeters(from.a, from.b) - from.meters);
@@ -56,6 +56,51 @@ std::optional<Route> routeTo(const RoadGraph& graph, const Place& from, std::siz
         consider(from.a, from.meters);
     }
     return best;
+}
+
+std::optional<Route> routeTo(const RoadGraph& graph, const Place& from, const Place& to)
+{
+    if (to.isNode()) {
+        return routeTo(graph, from, to.a);
+    }
+    const double street = graph.streetMeters(to.a, to.b);
+    const bool twoWay = graph.hasStreet(to.b, to.a);
+    std::optional<Route> best;
+    const auto consider = [&best](Route route) {
+        if (!best || route.meters < best->meters) {
+            best = std::move(route);
+        }
+    };
+    // En la misma calle: el mismo punto puede estar escrito como a→b o como b→a.
+    std::optional<double> fromOnStreet;
+    if (from.a == to.a && from.b == to.b) {
+        fromOnStreet = from.meters;
+    } else if (!from.isNode() && from.a == to.b && from.b == to.a) {
+        fromOnStreet = street - from.meters;
+    }
+    if (fromOnStreet && (*fromOnStreet <= to.meters || twoWay)) {
+        // Directo por la misma calle: hacia adelante por a→b, o hacia atrás por b→a.
+        consider(Route{from, RoadGraph::Path{}, std::fabs(to.meters - *fromOnStreet), to});
+    }
+    if (std::optional<Route> viaA = routeTo(graph, from, to.a)) {
+        viaA->meters += to.meters;
+        viaA->finish = to;
+        consider(std::move(*viaA));
+    }
+    if (twoWay) {
+        if (std::optional<Route> viaB = routeTo(graph, from, to.b)) {
+            viaB->meters += street - to.meters;
+            viaB->finish = to;
+            consider(std::move(*viaB));
+        }
+    }
+    return best;
+}
+
+std::optional<double> metersBetween(const RoadGraph& graph, const Place& from, const Place& to)
+{
+    const std::optional<Route> route = routeTo(graph, from, to);
+    return route ? std::optional<double>(route->meters) : std::nullopt;
 }
 
 Trip Trip::stay(const Place& place, std::int64_t sinceMs)
@@ -68,15 +113,29 @@ Trip Trip::stay(const Place& place, std::int64_t sinceMs)
 }
 
 Trip::Trip(const RoadGraph& graph, const RoadGraph::Path& path, std::int64_t departMs, double metersPerMs)
-    : Trip(graph, Route{Place(path.nodes.front()), path, path.meters}, departMs, metersPerMs)
+    : Trip(graph, Route{Place(path.nodes.front()), path, path.meters, std::nullopt}, departMs, metersPerMs)
 {
 }
 
 Trip::Trip(const RoadGraph& graph, const Route& route, std::int64_t departMs, double metersPerMs)
-    : _from(route.start), _to(route.path.nodes.back()), _departMs(departMs), _metersPerMs(metersPerMs)
+    : _from(route.start), _to(route.finish ? *route.finish : Place(route.path.nodes.back())), _departMs(departMs),
+      _metersPerMs(metersPerMs)
 {
     _metersAt.push_back(0);
     const std::vector<std::size_t>& nodes = route.path.nodes;
+    if (nodes.empty()) {
+        // Los dos en la misma calle a→b de `finish`: directo, hacia adelante o hacia atrás.
+        const Place& to = *route.finish;
+        const double street = graph.streetMeters(to.a, to.b);
+        const double at = _from.a == to.a ? _from.meters : street - _from.meters;
+        if (at <= to.meters) {
+            add(graph, to.a, to.b, at, to.meters - at);
+        } else {
+            add(graph, to.b, to.a, street - at, at - to.meters);
+        }
+        _arrivalMs = _departMs + static_cast<std::int64_t>(std::ceil(_metersAt.back() / _metersPerMs));
+        return;
+    }
     if (!_from.isNode()) {
         // El pedazo de la calle donde está: hacia adelante (a→b) o hacia atrás (por la arista b→a).
         const double street = graph.streetMeters(_from.a, _from.b);
@@ -88,6 +147,16 @@ Trip::Trip(const RoadGraph& graph, const Route& route, std::int64_t departMs, do
     }
     for (std::size_t i = 1; i < nodes.size(); ++i) {
         add(graph, nodes[i - 1], nodes[i], 0, graph.streetMeters(nodes[i - 1], nodes[i]));
+    }
+    if (route.finish) {
+        // El pedazo final: entra a la calle del punto desde a (hacia adelante) o desde b (hacia atrás).
+        const Place& to = *route.finish;
+        const double street = graph.streetMeters(to.a, to.b);
+        if (nodes.back() == to.a) {
+            add(graph, to.a, to.b, 0, to.meters);
+        } else {
+            add(graph, to.b, to.a, 0, street - to.meters);
+        }
     }
     _arrivalMs = _departMs + static_cast<std::int64_t>(std::ceil(_metersAt.back() / _metersPerMs));
 }
