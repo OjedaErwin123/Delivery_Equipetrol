@@ -41,7 +41,7 @@ int main()
             ok = check("bandeja abierta mientras se envían pedidos", false);
         }
     }
-    courier->inbox().close();
+    courier->close();
     worker.join();
 
     // Cada pedido: pickupStarted, orderPickedUp, orderDelivered, en ese orden y con la moto y el
@@ -91,7 +91,7 @@ int main()
     EventLog idleLog(idleOut);
     auto idle = std::make_shared<Courier>("c1", clock, idleLog, shutdown, kLegMs);
     std::thread idleWorker(&Courier::run, idle);
-    idle->inbox().close();
+    idle->close();
     idleWorker.join();
     ok &= check("moto sin pedidos termina al cerrar la bandeja", idle->delivered() == 0 && idleOut.str().empty());
 

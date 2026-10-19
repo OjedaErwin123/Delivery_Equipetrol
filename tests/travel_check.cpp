@@ -97,7 +97,7 @@ int main()
         }
         std::this_thread::yield();
     }
-    courier->inbox().close();
+    courier->close();
     worker.join();
     std::int64_t pickedAt = -1, deliveredAt = -1;
     std::istringstream in(out.str());
@@ -124,7 +124,7 @@ int main()
     if (stuck->assign(Order("o1", "r0", "c", clock.nowMs())) != OrderBook::Submit::accepted) {
         ok = check("bandeja abierta", false);
     }
-    stuck->inbox().close();
+    stuck->close();
     stuckWorker.join();  // si se quedara esperando un camino que no existe, esto se colgaría
     ok &= check("moto atrapada: deja el pedido (sin eventos, pendiente) y termina",
                 stuck->delivered() == 0 && stuckOut.str().empty());
