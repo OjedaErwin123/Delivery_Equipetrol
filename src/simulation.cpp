@@ -183,7 +183,8 @@ void dispatchRoundRobin(const SimClock& clock, EventLog& log, OrderBook& book,
 
 // Asignar `order` a `courier` (ya con su cupo reservado): la cocina empieza ahora. false si se
 // detuvo (el pedido queda pendiente).
-bool assignTo(Courier& courier, Order&& order, const SimClock& clock, EventLog& log, const Shutdown& shutdown)
+OrderBook::Submit assignTo(Courier& courier, Order& order, const SimClock& clock, EventLog& log,
+                           const Shutdown& shutdown)
 {
     Event e;
     e.t = clock.nowMs();
@@ -191,10 +192,10 @@ bool assignTo(Courier& courier, Order&& order, const SimClock& clock, EventLog& 
     e.order = order.id();
     e.courier = courier.id();
     order.markAssigned(e.t);
-    if (!shutdown.unlessStopped(e.t, [&log, &e] { log.write(e); })) {
-        return false;
-    }
-    return courier.assign(std::move(order)) == OrderBook::Submit::accepted;  // falla solo si se detiene
+    // La moto revalida (¿se averió desde que le reservamos el cupo?) y registra el evento con su lock.
+    // Si no lo acepta, el pedido no se movió.
+    return courier.assign(std::move(order),
+                          [&shutdown, &log, &e] { return shutdown.unlessStopped(e.t, [&log, &e] { log.write(e); }); });
 }
 
 // Hilo despachador (con mapa): para cada pedido, en orden FIFO, estima con TODAS las motos con lugar
@@ -243,13 +244,19 @@ int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log,
             }
             std::sort(ranked.begin(), ranked.end());
             for (const auto& choice : ranked) {
-                if (fleet.tryReserve(choice.second)) {  // revalidar (check-then-act)
-                    if (!assignTo(*couriers[choice.second], std::move(*order), clock, log, shutdown)) {
-                        return noCourier;  // se detuvo
-                    }
-                    assigned = true;
-                    break;
+                if (!fleet.tryReserve(choice.second)) {  // revalidar (check-then-act)
+                    continue;
                 }
+                const OrderBook::Submit result = assignTo(*couriers[choice.second], *order, clock, log, shutdown);
+                if (result == OrderBook::Submit::closed) {
+                    return noCourier;  // se detuvo
+                }
+                if (result == OrderBook::Submit::full) {
+                    fleet.release(choice.second);  // se averió entre reservar y asignar: la siguiente
+                    continue;
+                }
+                assigned = true;
+                break;
             }
             if (assigned) {
                 break;
