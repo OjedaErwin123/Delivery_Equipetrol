@@ -2,9 +2,11 @@
 //
 // Lee y valida la configuración; si algo no se puede usar (argumentos, archivo, JSON,
 // propiedades, referencias a nodos, rangos), lo explica en stderr y sale con código distinto
-// de cero sin simular. Si no, corre la simulación hasta durationS o hasta SIGINT/SIGTERM.
+// de cero sin simular. Si no, abre la ventana y corre la simulación hasta durationS, hasta
+// SIGINT/SIGTERM o hasta que se cierre la ventana. Sin pantalla, avisa y simula igual.
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -12,6 +14,7 @@
 #include "config.hpp"
 #include "simulation.hpp"
 #include "stop_signal.hpp"
+#include "window.hpp"
 
 int main(int argc, char** argv)
 {
@@ -34,8 +37,19 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    const SimParams params = paramsFromConfig(config);
+    // La ventana vive en este hilo (el principal), el mismo del bucle de frames que la dibuja.
+    std::string whyNot;
+    const std::unique_ptr<MapWindow> window = MapWindow::open(config, params.world, whyNot);
+    FrameHook onFrame;
+    if (window) {
+        onFrame = [&window](const Frame& frame) { return window->draw(frame); };  // false: se cerró
+    } else {
+        std::cerr << "delivery_sim: sin ventana: " << whyNot << "; la simulación sigue igual\n";
+    }
+
     installStopSignalHandlers();  // antes de lanzar hilos: Ctrl+C o kill detienen la simulación ordenadamente
-    const Summary summary = runSimulation(paramsFromConfig(config), log, std::cout, stopSignalFlag());
+    const Summary summary = runSimulation(params, log, std::cout, stopSignalFlag(), onFrame);
     std::cout << toJson(summary) << "\n";  // última línea de stdout
     return 0;
 }
