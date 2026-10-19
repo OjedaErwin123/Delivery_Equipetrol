@@ -155,6 +155,31 @@ void Fleet::setBroken(std::size_t courier, bool broken)
     _space.notify_all();
 }
 
+bool Fleet::moveAssigned(std::size_t from, std::size_t to, std::size_t count, const std::function<bool()>& commit)
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_aborted || _broken[to] || _assigned[to] + count > _capacity || !commit()) {
+            return false;
+        }
+        _assigned[from] -= count;
+        _assigned[to] += count;
+        ++_version;
+    }
+    _space.notify_all();
+    return true;
+}
+
+void Fleet::setBroken(std::size_t courier, bool broken)
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _broken[courier] = broken;
+        ++_version;
+    }
+    _space.notify_one();
+}
+
 void Fleet::abort()
 {
     {
