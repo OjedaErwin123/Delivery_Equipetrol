@@ -26,6 +26,12 @@ inline std::vector<std::string> numberedIds(const std::string& prefix, int count
     return ids;
 }
 
+// Con cuántas motos estima el despachador cada pedido: las 8 con lugar más cercanas al restaurante.
+// Decidido con el experimento de candidatos (README, DP.10): con 64 motos, estimar con todas hacía
+// que cada ronda tardara más que lo que tarda en llegar el próximo pedido cuando estimar es caro
+// (bajo TSan, 8,7 ms contra 2,0 ms): el libro se llenaba y se perdía un 26 % de las entregas.
+constexpr std::size_t kNearestCandidates = 8;
+
 // Parámetros de la simulación. delivery_sim los arma desde el archivo de configuración
 // (paramsFromConfig); las pruebas usan estos valores por defecto y cambian lo que necesitan.
 struct SimParams {
@@ -55,6 +61,7 @@ struct SimParams {
     // Para los experimentos (DP.10); delivery_sim usa los valores por defecto.
     std::size_t poolThreads = 0;     // hilos del pool de estimaciones; 0 = hardware_concurrency() (2 si no informa)
     std::size_t candidateLimit = 0;  // con cuántas motos se estima cada pedido: las más cercanas; 0 = todas
+                                     // (paramsFromConfig pone kNearestCandidates)
     std::int64_t meanIntervalMs = 36000;  // tiempo simulado medio entre dos pedidos (con ráfagas también)
     int burstMax = 1;                     // cada llegada trae entre 1 y burstMax pedidos en el mismo instante
     std::optional<std::size_t> maxPending;  // límite del libro (queueFull); sin valor, sin límite
