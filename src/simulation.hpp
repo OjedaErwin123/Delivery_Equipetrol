@@ -66,13 +66,13 @@ struct SimParams {
 // Los tramos siguen siendo fijos (legMs) hasta que las motos se muevan por el grafo.
 SimParams paramsFromConfig(const Config& config);
 
-// Resumen final (sección 6.3). Los reasignados todavía no se producen: se imprimen en 0.
-// pending = created - delivered - rejected.
+// Resumen final (sección 6.3). pending = created - delivered - rejected.
 struct Summary {
     int created = 0;
     int delivered = 0;
     int rejected = 0;
     int breakdowns = 0;
+    int reassigned = 0;  // pedidos traspasados (una línea orderReassigned cada uno)
     std::int64_t avgDeliveryMs = 0;  // de la creación a la entrega
     std::int64_t maxDeliveryMs = 0;
     std::vector<std::pair<std::string, int>> deliveredPerCourier;

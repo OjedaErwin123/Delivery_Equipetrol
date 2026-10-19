@@ -271,6 +271,62 @@ int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log,
     return noCourier;
 }
 
+// Mientras una moto averiada busca receptor, el despachador no reserva (prioridad del traspaso).
+// RAII: se termina en cualquier salida.
+class TransferTurn {
+public:
+    explicit TransferTurn(Fleet& fleet) : _fleet(fleet) { _fleet.beginTransfer(); }
+    ~TransferTurn() { _fleet.endTransfer(); }
+    TransferTurn(const TransferTurn&) = delete;
+    TransferTurn& operator=(const TransferTurn&) = delete;
+
+private:
+    Fleet& _fleet;
+};
+
+// La moto `broken` se averió: traspasa toda su mochila a la moto que llegue antes, por calle, al
+// punto de la avería (desde el final de su tramo actual). Calcula las distancias fuera de todo lock
+// y traspasa con transferTo, que revalida: si la elegida ya no puede, prueba la siguiente. Si
+// ninguna puede, duerme en la flota (sin CPU) hasta que algo cambie. Si no queda ninguna otra moto
+// que pueda trabajar (todas averiadas o terminadas), no traspasa: se repara igual y sigue con sus
+// pedidos (si no, todas esperarían a otra para siempre). false si se detuvo.
+bool handOver(Courier& broken, const std::vector<std::shared_ptr<Courier>>& couriers, Fleet& fleet,
+              const World& world, const SimClock& clock)
+{
+    const TransferTurn turn(fleet);
+    const Place spot = broken.trip().to();
+    for (;;) {
+        const std::uint64_t seen = fleet.version();  // antes de mirar: no se pierde un cambio
+        const std::size_t count = broken.plan().orders.size();
+        if (count == 0 || !fleet.othersWorking(broken.index())) {
+            return true;  // nada que traspasar, o nadie que pueda recibirlo: se queda con sus pedidos
+        }
+        const std::int64_t now = clock.nowMs();
+        std::vector<std::pair<double, std::size_t>> ranked;  // (ms hasta llegar al punto, moto)
+        for (std::size_t i : fleet.canReceive(count, broken.index())) {
+            const Trip trip = couriers[i]->trip();
+            if (const std::optional<double> meters = metersBetween(world.graph, trip.to(), spot)) {
+                const double wait = static_cast<double>(std::max<std::int64_t>(0, trip.arrivalMs() - now));
+                ranked.emplace_back(wait + *meters / world.metersPerMs, i);
+            }
+        }
+        std::sort(ranked.begin(), ranked.end());  // empate: la de menor índice
+        for (const auto& choice : ranked) {
+            switch (broken.transferTo(*couriers[choice.second])) {
+                case Courier::Handover::done:
+                    return true;
+                case Courier::Handover::stopped:
+                    return false;
+                case Courier::Handover::refused:
+                    break;  // cambió entre mirar y traspasar: la siguiente
+            }
+        }
+        if (!fleet.waitForChange(seen)) {
+            return false;  // detención
+        }
+    }
+}
+
 }  // namespace
 
 SimParams paramsFromConfig(const Config& c)
@@ -372,6 +428,15 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         couriers.push_back(std::make_shared<Courier>("c" + std::to_string(i), clock, log, shutdown, p.legMs, p.world,
                                                      restaurants, fleet, static_cast<std::size_t>(i),
                                                      p.breakdownProbability, p.seed + static_cast<std::uint32_t>(i)));
+    }
+    if (p.world) {
+        // Antes de lanzar los hilos. Captura `couriers` y `fleet` por referencia: viven hasta
+        // después del join de todas las motos.
+        for (const auto& courier : couriers) {
+            courier->onBreakdown([&couriers, &fleet, &p, &clock](Courier& broken) {
+                return handOver(broken, couriers, *fleet, *p.world, clock);
+            });
+        }
     }
     std::vector<std::thread> courierThreads;
     courierThreads.reserve(couriers.size());
@@ -484,6 +549,7 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         total += courier->totalDeliveryMs();
         s.maxDeliveryMs = std::max(s.maxDeliveryMs, courier->maxDeliveryMs());
         s.breakdowns += courier->breakdowns();
+        s.reassigned += courier->reassigned();
         s.deliveredPerCourier.emplace_back(courier->id(), courier->delivered());
     }
     s.avgDeliveryMs = s.delivered > 0 ? total / s.delivered : 0;
@@ -496,7 +562,8 @@ std::string toJson(const Summary& s)
                        ", \"delivered\": " + std::to_string(s.delivered) +
                        ", \"rejected\": " + std::to_string(s.rejected) +
                        ", \"pending\": " + std::to_string(s.created - s.delivered - s.rejected) +
-                       ", \"reassigned\": 0, \"breakdowns\": " + std::to_string(s.breakdowns) +
+                       ", \"reassigned\": " + std::to_string(s.reassigned) +
+                       ", \"breakdowns\": " + std::to_string(s.breakdowns) +
                        ", \"avgDeliveryMs\": " + std::to_string(s.avgDeliveryMs) +
                        ", \"maxDeliveryMs\": " + std::to_string(s.maxDeliveryMs) + ", \"deliveredPerCourier\": {";
     for (std::size_t i = 0; i < s.deliveredPerCourier.size(); ++i) {

@@ -165,6 +165,12 @@ add_executable(breakdown_check tests/breakdown_check.cpp src/simulation.cpp src/
 delivery_target_options(breakdown_check)
 add_test(NAME breakdown_check COMMAND breakdown_check)
 
+add_executable(handover_check tests/handover_check.cpp src/simulation.cpp src/thread_pool.cpp src/estimate.cpp
+               src/road_graph.cpp src/courier.cpp src/travel.cpp src/restaurant.cpp src/fleet.cpp src/order_book.cpp
+               src/event_log.cpp)
+delivery_target_options(handover_check)
+add_test(NAME handover_check COMMAND handover_check)
+
 add_executable(transfer_check tests/transfer_check.cpp src/courier.cpp src/estimate.cpp src/travel.cpp
                src/restaurant.cpp src/fleet.cpp src/road_graph.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(transfer_check)
