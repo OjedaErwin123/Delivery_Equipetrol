@@ -287,7 +287,9 @@ private:
 // La moto `broken` se averió: traspasa toda su mochila a la moto que llegue antes, por calle, al
 // punto de la avería (desde el final de su tramo actual). Calcula las distancias fuera de todo lock
 // y traspasa con transferTo, que revalida: si la elegida ya no puede, prueba la siguiente. Si
-// ninguna puede, duerme en la flota (sin CPU) hasta que algo cambie. false si se detuvo.
+// ninguna puede, duerme en la flota (sin CPU) hasta que algo cambie. Si no queda ninguna otra moto
+// que pueda trabajar (todas averiadas o terminadas), no traspasa: se repara igual y sigue con sus
+// pedidos (si no, todas esperarían a otra para siempre). false si se detuvo.
 bool handOver(Courier& broken, const std::vector<std::shared_ptr<Courier>>& couriers, Fleet& fleet,
               const World& world, const SimClock& clock)
 {
@@ -296,8 +298,8 @@ bool handOver(Courier& broken, const std::vector<std::shared_ptr<Courier>>& cour
     for (;;) {
         const std::uint64_t seen = fleet.version();  // antes de mirar: no se pierde un cambio
         const std::size_t count = broken.plan().orders.size();
-        if (count == 0 || !fleet.othersAlive(broken.index())) {
-            return true;  // nada que traspasar, o nadie que lo reciba (solo con tope de pedidos)
+        if (count == 0 || !fleet.othersWorking(broken.index())) {
+            return true;  // nada que traspasar, o nadie que pueda recibirlo: se queda con sus pedidos
         }
         const std::int64_t now = clock.nowMs();
         std::vector<std::pair<double, std::size_t>> ranked;  // (ms hasta llegar al punto, moto)

@@ -51,7 +51,8 @@
 // Averías: al salir a cada viaje (con mapa) sortea si se avería, con su propio generador. Si toca,
 // se avería en un instante al azar del viaje: queda quieta en ese punto de la calle, la flota deja
 // de ofrecerla, traspasa toda su mochila (con `handOver`: elige el receptor y espera si hace falta)
-// y recién después se repara, en kRepairMs. Queda quieta ahí, sin pedidos.
+// y recién después se repara, en kRepairMs. Queda quieta ahí, sin pedidos. Si no queda ninguna otra
+// moto que pueda trabajar (todas averiadas o terminadas), se repara igual y sigue con sus pedidos.
 // Provisorio: los ya recogidos pasan al receptor como recogidos (el rescate llega en otro PR).
 constexpr std::int64_t kRepairMs = 300000;  // 5 min simulados
 

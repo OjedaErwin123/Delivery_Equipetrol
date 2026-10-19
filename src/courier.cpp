@@ -216,7 +216,7 @@ Courier::Breakdown Courier::breakDown(const Trip& trip, std::int64_t at)
     bool kept = false;
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        kept = !_bag.empty();  // solo si no quedaba otra moto viva (con tope de pedidos: pruebas)
+        kept = !_bag.empty();  // no quedaba otra moto que pudiera trabajar: los lleva ella
     }
     // La reparación: tiempo simulado, interrumpible por la detención y sin CPU.
     if (_shutdown.sleepUntil(_clock.realTimeIn(kRepairMs))) {
