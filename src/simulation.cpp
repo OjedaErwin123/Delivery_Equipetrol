@@ -236,14 +236,16 @@ int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log,
     while (std::optional<Order> order = book.take()) {
         const std::int64_t deadline = order->createdAtMs() + p.acceptTimeoutMs;
         bool assigned = false;
+        bool widen = false;  // las más cercanas no dieron ninguna estimación usable: probar con todas
         for (;;) {
             const std::uint64_t seen = fleet.version();  // antes de estimar: un cupo liberado durante la ronda no se pierde
             const std::int64_t now = clock.nowMs();
             if (now >= deadline) {
                 break;
             }
+            const std::size_t limit = widen ? 0 : p.candidateLimit;
             const std::vector<std::size_t> candidates =
-                nearest(fleet.withSpace(), p.candidateLimit, *p.world, couriers, order->restaurant());
+                nearest(fleet.withSpace(), limit, *p.world, couriers, order->restaurant());
             const PlannedOrder planned{order->restaurant(), order->destination(), now + order->prepMs(), false};
             const auto roundStart = std::chrono::steady_clock::now();
             std::vector<std::future<std::int64_t>> etas;
@@ -269,6 +271,9 @@ int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log,
             if (!candidates.empty()) {
                 roundMs.push_back(
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - roundStart).count());
+            }
+            if (ranked.empty() && limit > 0 && candidates.size() == limit) {
+                widen = true;  // p. ej. las más cercanas están atrapadas (sin camino): no dar noCourier por eso
             }
             std::sort(ranked.begin(), ranked.end());
             for (const auto& choice : ranked) {
@@ -375,6 +380,7 @@ SimParams paramsFromConfig(const Config& c)
     p.bagCapacity = static_cast<std::size_t>(c.bagCapacity);
     p.quoteTimeoutMs = c.quoteTimeoutMs;
     p.acceptTimeoutMs = c.acceptTimeoutMs;
+    p.candidateLimit = kNearestCandidates;
     p.maxPending = static_cast<std::size_t>(c.maxPending);  // validado >= 0; 0 rechaza todo
     p.timeScale = c.timeScale;
     p.seed = static_cast<std::uint32_t>(c.seed);
