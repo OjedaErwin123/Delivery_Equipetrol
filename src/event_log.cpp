@@ -1,5 +1,6 @@
 #include "event_log.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
 namespace {
@@ -61,4 +62,36 @@ void EventLog::write(const Event& e)
     const std::string line = toJsonLine(e) + '\n';  // fuera del lock
     std::lock_guard<std::mutex> lock(_mutex);
     _out << line;
+    count(e);  // en la misma sección crítica: los contadores van a la par del log
+}
+
+LiveStats EventLog::stats() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _stats;
+}
+
+void EventLog::count(const Event& e)
+{
+    if (e.event == "orderCreated") {
+        ++_stats.created;
+        _createdAt[e.order] = e.t;
+        _stats.activeDestinations[e.order] = e.destination;
+    } else if (e.event == "orderRejected") {
+        ++_stats.rejected;
+        _createdAt.erase(e.order);
+        _stats.activeDestinations.erase(e.order);
+    } else if (e.event == "orderDelivered") {
+        const std::int64_t took = e.t - _createdAt[e.order];
+        ++_stats.delivered;
+        _stats.totalDeliveryMs += took;
+        _stats.maxDeliveryMs = std::max(_stats.maxDeliveryMs, took);
+        ++_stats.deliveredPerCourier[e.courier];
+        _createdAt.erase(e.order);
+        _stats.activeDestinations.erase(e.order);
+    } else if (e.event == "orderReassigned") {
+        ++_stats.reassigned;
+    } else if (e.event == "courierBreakdown") {
+        ++_stats.breakdowns;
+    }
 }
