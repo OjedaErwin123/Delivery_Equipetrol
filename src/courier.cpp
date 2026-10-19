@@ -39,6 +39,25 @@ CourierPlan Courier::plan() const
     return plan;
 }
 
+OrderBook::Submit Courier::assign(Order&& order, const std::function<bool()>& logAssigned)
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (_closed || _aborted) {
+            return OrderBook::Submit::closed;
+        }
+        if (_broken) {
+            return OrderBook::Submit::full;  // se averió después de que le reservaran el cupo
+        }
+        if (!logAssigned()) {
+            return OrderBook::Submit::closed;  // se detuvo
+        }
+        _bag.emplace_back(std::move(order));  // con su evento, en la misma sección crítica
+    }
+    _work.notify_one();
+    return OrderBook::Submit::accepted;
+}
+
 OrderBook::Submit Courier::assign(Order&& order)
 {
     {
@@ -233,14 +252,8 @@ Courier::Leg Courier::travelTo(const Place& target)
             publish(Trip::stay(_at, trip.arrivalMs()));
             return Leg::arrived;
         }
-        switch (breakDown(trip, *breaksAt)) {
-            case Breakdown::stopped:
-                return Leg::stopped;
-            case Breakdown::handedOver:
-                return Leg::handedOver;
-            case Breakdown::kept:
-                break;  // sigue el viaje desde donde quedó
-        }
+        // Después de una avería no se sigue el viaje a ciegas: la mochila pudo cambiar.
+        return breakDown(trip, *breaksAt) ? Leg::interrupted : Leg::stopped;
     }
 }
 
@@ -259,13 +272,13 @@ std::optional<std::int64_t> Courier::drawBreakdown(const Trip& trip)
                                                        static_cast<std::uint64_t>(duration));
 }
 
-Courier::Breakdown Courier::breakDown(const Trip& trip, std::int64_t at)
+bool Courier::breakDown(const Trip& trip, std::int64_t at)
 {
     _at = trip.placeAt(at);  // a mitad de una calle (o en un nodo, si justo pasaba por uno)
     {
         std::lock_guard<std::mutex> lock(_mutex);
         _trip = Trip::stay(_at, at);
-        _broken = true;
+        _broken = true;  // desde aquí rechaza asignaciones (con el mismo lock con que se asigna)
     }
     if (_fleet) {
         _fleet->setBroken(_index, true);  // ya no es candidata del despachador
@@ -275,29 +288,24 @@ Courier::Breakdown Courier::breakDown(const Trip& trip, std::int64_t at)
     e.event = "courierBreakdown";
     e.courier = _id;
     if (!_shutdown.unlessStopped(at, [this, &e] { _log.write(e); })) {
-        return Breakdown::stopped;
+        return false;
     }
     ++_breakdowns;  // el mismo evento que se registró: el resumen coincide con el log
     // Traspasa toda la mochila (espera receptor si hace falta). La reparación empieza después.
     if (_handOver && !_handOver(*this)) {
-        return Breakdown::stopped;
+        return false;
     }
     {
         // La reparación empieza cuando le retiraron toda la comida que ya había recogido (sin CPU).
         std::unique_lock<std::mutex> lock(_mutex);
         _work.wait(lock, [this] { return _aborted || _foodLeft == 0; });
         if (_aborted) {
-            return Breakdown::stopped;
+            return false;
         }
-    }
-    bool kept = false;
-    {
-        std::lock_guard<std::mutex> lock(_mutex);
-        kept = !_bag.empty();  // no quedaba otra moto que pudiera trabajar: los lleva ella
     }
     // La reparación: tiempo simulado, interrumpible por la detención y sin CPU.
     if (_shutdown.sleepUntil(_clock.realTimeIn(kRepairMs))) {
-        return Breakdown::stopped;
+        return false;
     }
     {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -306,7 +314,7 @@ Courier::Breakdown Courier::breakDown(const Trip& trip, std::int64_t at)
     if (_fleet) {
         _fleet->setBroken(_index, false);
     }
-    return kept || !_handOver ? Breakdown::kept : Breakdown::handedOver;
+    return true;
 }
 
 Courier::Leg Courier::pickUp(const std::string& restaurant)
@@ -423,8 +431,8 @@ void Courier::run()
         if (toCustomer == Leg::stopped) {
             break;
         }
-        if (toCustomer == Leg::handedOver) {
-            continue;  // se averió y traspasó: ya no lo lleva
+        if (toCustomer == Leg::interrupted) {
+            continue;  // se averió en el camino: vuelve a mirar su mochila
         }
         if (toCustomer == Leg::noPath) {
             drop(next->id);  // no debería pasar; si pasa, el pedido queda pendiente y la moto sigue
