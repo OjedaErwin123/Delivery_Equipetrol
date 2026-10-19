@@ -52,6 +52,7 @@ struct SimParams {
     std::int64_t meanIntervalMs = 36000;  // tiempo simulado medio entre dos pedidos (con ráfagas también)
     int burstMax = 1;                     // cada llegada trae entre 1 y burstMax pedidos en el mismo instante
     std::optional<std::size_t> maxPending;  // límite del libro (queueFull); sin valor, sin límite
+    double breakdownProbability = 0;      // por viaje (con mapa); 0 = sin averías
     std::int64_t legMs = 60000;           // sin mapa: duración simulada de cada tramo de viaje
     double timeScale = 60.0;              // segundos simulados por segundo real
     std::uint32_t seed = 42;
@@ -65,12 +66,13 @@ struct SimParams {
 // Los tramos siguen siendo fijos (legMs) hasta que las motos se muevan por el grafo.
 SimParams paramsFromConfig(const Config& config);
 
-// Resumen final (sección 6.3). Los campos que esta versión todavía no produce
-// (reasignados, averías) se imprimen en 0. pending = created - delivered - rejected.
+// Resumen final (sección 6.3). Los reasignados todavía no se producen: se imprimen en 0.
+// pending = created - delivered - rejected.
 struct Summary {
     int created = 0;
     int delivered = 0;
     int rejected = 0;
+    int breakdowns = 0;
     std::int64_t avgDeliveryMs = 0;  // de la creación a la entrega
     std::int64_t maxDeliveryMs = 0;
     std::vector<std::pair<std::string, int>> deliveredPerCourier;
