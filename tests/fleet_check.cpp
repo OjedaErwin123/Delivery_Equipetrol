@@ -2,7 +2,8 @@
 // duerme cuando todas están llenas y despierta al liberarse un cupo, abort despierta al que
 // espera, y con un despachador y 4 motos en sus hilos nunca se pasa el cupo. Para los traspasos por
 // avería: mientras uno espera, el despachador no reserva (prioridad); receptores posibles (no
-// averiados, vivos, con lugar para todos); y quién sigue vivo. Sale con 0 si todo está bien.
+// averiados, vivos, con lugar para todos); y si queda otra moto que pueda trabajar. Sale con 0 si
+// todo está bien.
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -115,10 +116,15 @@ int main()
         fleet.endTransfer();
         ok &= check("prioridad: mientras un traspaso espera, el despachador no reserva; al terminar, sí",
                     blocked && fleet.version() != before && fleet.tryReserve(2));
-        fleet.retire(1);
+        fleet.setBroken(1, true);
+        const bool oneHealthy = fleet.othersWorking(0);  // la 2 está sana
+        fleet.setBroken(2, true);
+        const bool allBroken = !fleet.othersWorking(0);  // la 1 y la 2 averiadas
+        fleet.setBroken(2, false);
+        const bool repaired = fleet.othersWorking(0);
         fleet.retire(2);
-        ok &= check("vivas: retiradas la 1 y la 2, para la 0 no queda nadie; para la 1, la 0",
-                    !fleet.othersAlive(0) && fleet.othersAlive(1) && fleet.canReceive(1, 0).empty());
+        ok &= check("¿otra que pueda trabajar? sí con una sana; no si las demás están averiadas o terminaron",
+                    oneHealthy && allBroken && repaired && !fleet.othersWorking(0) && fleet.canReceive(1, 0).empty());
     }
     return ok ? 0 : 1;
 }

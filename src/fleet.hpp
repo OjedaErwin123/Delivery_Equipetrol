@@ -53,9 +53,11 @@ public:
     // Las motos (distintas de `except`) que podrían recibir `count` pedidos: no averiadas, vivas y con
     // lugar para todos. Una foto, como withSpace: se revalida al traspasar.
     std::vector<std::size_t> canReceive(std::size_t count, std::size_t except) const;
-    // La moto terminó su hilo: ya no recibe nada. ¿Queda alguna otra viva?
+    // La moto terminó su hilo: ya no recibe nada.
     void retire(std::size_t courier);
-    bool othersAlive(std::size_t except) const;
+    // ¿Queda alguna otra moto que pueda trabajar (viva y no averiada)? Si no, una averiada que busca
+    // receptor no lo va a encontrar nunca: se repara igual y sigue con sus pedidos.
+    bool othersWorking(std::size_t except) const;
 
     // La moto `courier` terminó un pedido (lo entregó o no pudo tomarlo): libera su cupo.
     void release(std::size_t courier);

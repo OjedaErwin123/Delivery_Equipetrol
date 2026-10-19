@@ -108,11 +108,11 @@ void Fleet::retire(std::size_t courier)
     _space.notify_all();
 }
 
-bool Fleet::othersAlive(std::size_t except) const
+bool Fleet::othersWorking(std::size_t except) const
 {
     std::lock_guard<std::mutex> lock(_mutex);
     for (std::size_t i = 0; i < _retired.size(); ++i) {
-        if (i != except && !_retired[i]) {
+        if (i != except && !_retired[i] && !_broken[i]) {
             return true;
         }
     }
