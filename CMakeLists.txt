@@ -91,6 +91,10 @@ add_executable(delivery_sim
   src/event_log.cpp
 )
 delivery_target_options(delivery_sim)
+if(ENABLE_TSAN)
+  # Supresiones de TSan para las bibliotecas gráficas que usa OpenCV (ver el archivo).
+  target_sources(delivery_sim PRIVATE src/tsan_suppressions.cpp)
+endif()
 # SYSTEM: los warnings de los headers de OpenCV no cuentan como nuestros.
 target_include_directories(delivery_sim SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(delivery_sim PRIVATE ${OpenCV_LIBS} nlohmann_json)
