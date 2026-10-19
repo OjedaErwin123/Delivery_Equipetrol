@@ -52,6 +52,9 @@ struct SimParams {
     // rechaza noCourier un pedido sin asignar a los acceptTimeoutMs (tiempo SIMULADO) de creado.
     std::int64_t quoteTimeoutMs = 200;
     std::int64_t acceptTimeoutMs = 600000;
+    // Para los experimentos (DP.10); delivery_sim usa los valores por defecto.
+    std::size_t poolThreads = 0;     // hilos del pool de estimaciones; 0 = hardware_concurrency() (2 si no informa)
+    std::size_t candidateLimit = 0;  // con cuántas motos se estima cada pedido: las más cercanas; 0 = todas
     std::int64_t meanIntervalMs = 36000;  // tiempo simulado medio entre dos pedidos (con ráfagas también)
     int burstMax = 1;                     // cada llegada trae entre 1 y burstMax pedidos en el mismo instante
     std::optional<std::size_t> maxPending;  // límite del libro (queueFull); sin valor, sin límite
@@ -76,6 +79,10 @@ struct Summary {
     int rejected = 0;
     int breakdowns = 0;
     int reassigned = 0;  // pedidos traspasados (una línea orderReassigned cada uno)
+    // Para los experimentos (no se imprimen): cuántos rechazos fueron noCourier y cuánto tardó (tiempo
+    // REAL, ms) cada ronda de estimación, de encolar las tareas a tener los resultados (o el plazo).
+    int noCourier = 0;
+    std::vector<double> estimateRoundMs;
     std::int64_t avgDeliveryMs = 0;  // de la creación a la entrega
     std::int64_t maxDeliveryMs = 0;
     std::vector<std::pair<std::string, int>> deliveredPerCourier;

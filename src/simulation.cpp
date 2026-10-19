@@ -205,9 +205,31 @@ bool assignTo(Courier& courier, Order&& order, const SimClock& clock, EventLog& 
 // libere un cupo o hasta el vencimiento; vencido (creación + acceptTimeoutMs), noCourier.
 // Las estimaciones trabajan sobre copias (plan de la moto, World de solo lectura): sin locks.
 // Devuelve cuántos rechazó por noCourier.
+// Las `limit` motos de `candidates` más cercanas en línea recta al restaurante (desde donde termina su
+// tramo actual). Es barato (sin caminos): sirve para no estimar con todas cuando la flota es grande.
+std::vector<std::size_t> nearest(std::vector<std::size_t> candidates, std::size_t limit, const World& world,
+                                 const std::vector<std::shared_ptr<Courier>>& couriers, const std::string& restaurant)
+{
+    if (limit == 0 || candidates.size() <= limit) {
+        return candidates;
+    }
+    const Coordinates shop = world.graph.coordinates(world.restaurantNode.at(restaurant));
+    std::vector<std::pair<double, std::size_t>> byDistance;
+    for (std::size_t i : candidates) {
+        const Coordinates at = coordinatesOf(world.graph, couriers[i]->trip().to());
+        byDistance.emplace_back(haversineMeters(at.lat, at.lon, shop.lat, shop.lon), i);
+    }
+    std::sort(byDistance.begin(), byDistance.end());  // empate: la de menor índice
+    std::vector<std::size_t> chosen;
+    for (std::size_t k = 0; k < limit; ++k) {
+        chosen.push_back(byDistance[k].second);
+    }
+    return chosen;
+}
+
 int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log, OrderBook& book,
                        const std::vector<std::shared_ptr<Courier>>& couriers, Fleet& fleet, ThreadPool& pool,
-                       const Shutdown& shutdown)
+                       const Shutdown& shutdown, std::vector<double>& roundMs)
 {
     int noCourier = 0;
     while (std::optional<Order> order = book.take()) {
@@ -219,8 +241,10 @@ int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log,
             if (now >= deadline) {
                 break;
             }
-            const std::vector<std::size_t> candidates = fleet.withSpace();
+            const std::vector<std::size_t> candidates =
+                nearest(fleet.withSpace(), p.candidateLimit, *p.world, couriers, order->restaurant());
             const PlannedOrder planned{order->restaurant(), order->destination(), now + order->prepMs(), false};
+            const auto roundStart = std::chrono::steady_clock::now();
             std::vector<std::future<std::int64_t>> etas;
             for (std::size_t i : candidates) {
                 // Todo por valor: la tarea puede terminar tarde, cuando el despachador ya siguió.
@@ -240,6 +264,10 @@ int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log,
                     std::cerr << "delivery_sim: estimación fallida (pedido " << order->id() << ", moto "
                               << couriers[candidates[k]]->id() << "): " << error.what() << "\n";
                 }
+            }
+            if (!candidates.empty()) {
+                roundMs.push_back(
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - roundStart).count());
             }
             std::sort(ranked.begin(), ranked.end());
             for (const auto& choice : ranked) {
@@ -454,12 +482,14 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
     // (join de sus hilos) al final de runSimulation, después del join del despachador.
     std::unique_ptr<ThreadPool> pool;
     if (p.world) {
-        pool = std::make_unique<ThreadPool>(ThreadPool::defaultSize());
+        pool = std::make_unique<ThreadPool>(p.poolThreads > 0 ? p.poolThreads : ThreadPool::defaultSize());
     }
     int noCourier = 0;  // solo lo escribe el despachador; se lee después del join
-    std::thread dispatcher([&p, &clock, &log, &book, &couriers, &fleet, &pool, &shutdown, &noCourier, &running] {
+    std::vector<double> roundMs;  // ídem: tiempos de las rondas de estimación
+    std::thread dispatcher([&p, &clock, &log, &book, &couriers, &fleet, &pool, &shutdown, &noCourier, &roundMs,
+                            &running] {
         if (pool) {
-            noCourier = dispatchByEstimate(p, clock, log, book, couriers, *fleet, *pool, shutdown);
+            noCourier = dispatchByEstimate(p, clock, log, book, couriers, *fleet, *pool, shutdown, roundMs);
         } else {
             dispatchRoundRobin(clock, log, book, couriers, *fleet, shutdown);  // pruebas sin mapa
         }
@@ -558,6 +588,8 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
     Summary s;
     s.created = generated.created;
     s.rejected = generated.rejected + noCourier;
+    s.noCourier = noCourier;
+    s.estimateRoundMs = std::move(roundMs);
     std::int64_t total = 0;
     for (const auto& courier : couriers) {
         s.delivered += courier->delivered();
