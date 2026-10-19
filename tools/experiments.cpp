@@ -166,7 +166,10 @@ void poolSize(const Lab& lab)
         Pooled all;
         for (std::int64_t seed : kSeeds) {
             all.add(lab.run("pool/hilos" + std::to_string(threads), seed, bigFleet,
-                            [threads](SimParams& p) { p.poolThreads = threads; }));
+                            [threads](SimParams& p) {
+                                p.poolThreads = threads;
+                                p.candidateLimit = 0;  // todas: el experimento mide el pool con mucho trabajo
+                            }));
         }
         const double m = mean(all.rounds);
         if (threads == 1) {
