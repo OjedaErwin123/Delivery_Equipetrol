@@ -1,0 +1,108 @@
+==================
+WARNING: ThreadSanitizer: data race (pid=7990)
+  Read of size 8 at 0x720c00031458 by thread T12:
+    #0 memcpy ../../../../src/libsanitizer/sanitizer_common/sanitizer_common_interceptors_memintrinsics.inc:117 (libtsan.so.2+0x8edad) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 memcpy ../../../../src/libsanitizer/sanitizer_common/sanitizer_common_interceptors_memintrinsics.inc:109 (libtsan.so.2+0x8edad)
+    #2 <null> <null> (libQt5Core.so.5+0x2f58dc) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+
+  Previous write of size 8 at 0x720c00031458 by main thread:
+    #0 malloc ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:670 (libtsan.so.2+0x8d29c) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 QArrayData::allocate(unsigned long, unsigned long, unsigned long, QFlags<QArrayData::AllocationOption>) <null> (libQt5Core.so.5+0xee57e) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+    #2 main /home/aledrex/.cache/dp11-sin/src/main.cpp:43 (delivery_sim+0xa2c4) (BuildId: d4e7c3ee04397f7c0bd3febb355add899d2877a0)
+
+  Location is heap block of size 48 at 0x720c00031440 allocated by main thread:
+    #0 malloc ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:670 (libtsan.so.2+0x8d29c) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 QArrayData::allocate(unsigned long, unsigned long, unsigned long, QFlags<QArrayData::AllocationOption>) <null> (libQt5Core.so.5+0xee57e) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+    #2 main /home/aledrex/.cache/dp11-sin/src/main.cpp:43 (delivery_sim+0xa2c4) (BuildId: d4e7c3ee04397f7c0bd3febb355add899d2877a0)
+
+  Thread T12 'QDBusConnection' (tid=8003, running) created by main thread at:
+    #0 pthread_create ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:1078 (libtsan.so.2+0x5cb02) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 QThread::start(QThread::Priority) <null> (libQt5Core.so.5+0xe20fa) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+    #2 main /home/aledrex/.cache/dp11-sin/src/main.cpp:43 (delivery_sim+0xa2c4) (BuildId: d4e7c3ee04397f7c0bd3febb355add899d2877a0)
+
+SUMMARY: ThreadSanitizer: data race (/usr/lib/x86_64-linux-gnu/libQt5Core.so.5+0x2f58dc) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c) 
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=7990)
+  Write of size 8 at 0x720c00031440 by thread T12:
+    #0 free ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:735 (libtsan.so.2+0x8cb43) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 <null> <null> (libQt5Core.so.5+0x2f590c) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+
+  Previous write of size 8 at 0x720c00031440 by main thread:
+    #0 malloc ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:670 (libtsan.so.2+0x8d29c) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 QArrayData::allocate(unsigned long, unsigned long, unsigned long, QFlags<QArrayData::AllocationOption>) <null> (libQt5Core.so.5+0xee57e) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+    #2 main /home/aledrex/.cache/dp11-sin/src/main.cpp:43 (delivery_sim+0xa2c4) (BuildId: d4e7c3ee04397f7c0bd3febb355add899d2877a0)
+
+  Thread T12 'QDBusConnection' (tid=8003, running) created by main thread at:
+    #0 pthread_create ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:1078 (libtsan.so.2+0x5cb02) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 QThread::start(QThread::Priority) <null> (libQt5Core.so.5+0xe20fa) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+    #2 main /home/aledrex/.cache/dp11-sin/src/main.cpp:43 (delivery_sim+0xa2c4) (BuildId: d4e7c3ee04397f7c0bd3febb355add899d2877a0)
+
+SUMMARY: ThreadSanitizer: data race (/usr/lib/x86_64-linux-gnu/libQt5Core.so.5+0x2f590c) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c) 
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=7990)
+  Write of size 8 at 0x721c0000a950 by thread T12:
+    #0 operator delete(void*, unsigned long) ../../../../src/libsanitizer/tsan/tsan_new_delete.cpp:150 (libtsan.so.2+0xab037) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 QCoreApplicationPrivate::sendPostedEvents(QObject*, int, QThreadData*) <null> (libQt5Core.so.5+0x2f1237) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+
+  Previous write of size 8 at 0x721c0000a950 by main thread:
+    #0 operator new(unsigned long) ../../../../src/libsanitizer/tsan/tsan_new_delete.cpp:64 (libtsan.so.2+0xaba12) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 <null> <null> (libQt5Core.so.5+0x32a93f) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+    #2 main /home/aledrex/.cache/dp11-sin/src/main.cpp:43 (delivery_sim+0xa2c4) (BuildId: d4e7c3ee04397f7c0bd3febb355add899d2877a0)
+
+  Thread T12 'QDBusConnection' (tid=8003, running) created by main thread at:
+    #0 pthread_create ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:1078 (libtsan.so.2+0x5cb02) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 QThread::start(QThread::Priority) <null> (libQt5Core.so.5+0xe20fa) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+    #2 main /home/aledrex/.cache/dp11-sin/src/main.cpp:43 (delivery_sim+0xa2c4) (BuildId: d4e7c3ee04397f7c0bd3febb355add899d2877a0)
+
+SUMMARY: ThreadSanitizer: data race (/usr/lib/x86_64-linux-gnu/libQt5Core.so.5+0x2f1237) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c) in QCoreApplicationPrivate::sendPostedEvents(QObject*, int, QThreadData*)
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=7990)
+  Atomic read of size 1 at 0x720c00032250 by main thread:
+    #0 pthread_mutex_lock ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:1424 (libtsan.so.2+0x5c00a) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 dbus_connection_get_is_connected <null> (libdbus-1.so.3+0x11e1d) (BuildId: 2fdc230f668d66316c34db81c69962c1339c7037)
+    #2 main /home/aledrex/.cache/dp11-sin/src/main.cpp:43 (delivery_sim+0xa2c4) (BuildId: d4e7c3ee04397f7c0bd3febb355add899d2877a0)
+
+  Previous write of size 8 at 0x720c00032250 by thread T12 (mutexes: write M0):
+    #0 malloc ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:670 (libtsan.so.2+0x8d29c) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 <null> <null> (libdbus-1.so.3+0x36b09) (BuildId: 2fdc230f668d66316c34db81c69962c1339c7037)
+
+  Location is heap block of size 40 at 0x720c00032250 allocated by thread T12:
+    #0 malloc ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:670 (libtsan.so.2+0x8d29c) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 <null> <null> (libdbus-1.so.3+0x36b09) (BuildId: 2fdc230f668d66316c34db81c69962c1339c7037)
+
+  Mutex M0 (0x720c000319e0) created at:
+    #0 pthread_mutex_init ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:1398 (libtsan.so.2+0x5b908) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 <null> <null> (libdbus-1.so.3+0x36b37) (BuildId: 2fdc230f668d66316c34db81c69962c1339c7037)
+
+  Thread T12 'QDBusConnection' (tid=8003, running) created by main thread at:
+    #0 pthread_create ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:1078 (libtsan.so.2+0x5cb02) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 QThread::start(QThread::Priority) <null> (libQt5Core.so.5+0xe20fa) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+    #2 main /home/aledrex/.cache/dp11-sin/src/main.cpp:43 (delivery_sim+0xa2c4) (BuildId: d4e7c3ee04397f7c0bd3febb355add899d2877a0)
+
+SUMMARY: ThreadSanitizer: data race (/usr/lib/x86_64-linux-gnu/libdbus-1.so.3+0x11e1d) (BuildId: 2fdc230f668d66316c34db81c69962c1339c7037) in dbus_connection_get_is_connected
+==================
+==================
+WARNING: ThreadSanitizer: lock-order-inversion (potential deadlock) (pid=7990)
+  Cycle in lock order graph: M0 (0x720c000319e0) => M1 (0x720c00032250) => M0
+
+  Mutex M1 acquired here while holding mutex M0 in thread T12:
+    #0 pthread_mutex_lock ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:1424 (libtsan.so.2+0x5c00a) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 <null> <null> (libdbus-1.so.3+0x1462c) (BuildId: 2fdc230f668d66316c34db81c69962c1339c7037)
+
+    Hint: use TSAN_OPTIONS=second_deadlock_stack=1 to get more informative warning message
+
+  Mutex M0 acquired here while holding mutex M1 in thread T12:
+    #0 pthread_mutex_lock ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:1424 (libtsan.so.2+0x5c00a) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 <null> <null> (libdbus-1.so.3+0x156a2) (BuildId: 2fdc230f668d66316c34db81c69962c1339c7037)
+
+  Thread T12 'QDBusConnection' (tid=8003, running) created by main thread at:
+    #0 pthread_create ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:1078 (libtsan.so.2+0x5cb02) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 QThread::start(QThread::Priority) <null> (libQt5Core.so.5+0xe20fa) (BuildId: 9fdf1f2c9ab2385de09d6b74db5aec5cf727a66c)
+    #2 main /home/aledrex/.cache/dp11-sin/src/main.cpp:43 (delivery_sim+0xa2c4) (BuildId: d4e7c3ee04397f7c0bd3febb355add899d2877a0)
+
+SUMMARY: ThreadSanitizer: lock-order-inversion (potential deadlock) (/usr/lib/x86_64-linux-gnu/libdbus-1.so.3+0x1462c) (BuildId: 2fdc230f668d66316c34db81c69962c1339c7037) 
+==================
+ThreadSanitizer: reported 5 warnings

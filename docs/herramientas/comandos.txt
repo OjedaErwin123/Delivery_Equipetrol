@@ -1,0 +1,5 @@
+# Comandos exactos (cada uno se detiene con kill -INT a los 40 s reales)
+tsan_sin_supresiones: build-tsan sin src/tsan_suppressions.cpp; ./delivery_sim ../config/equipetrol.json
+tsan:                 cmake -DENABLE_TSAN=ON .. && make; ./delivery_sim ../config/equipetrol.json
+valgrind_con_ventana: valgrind --leak-check=full --track-origins=yes ./delivery_sim ../config/equipetrol.json
+valgrind_sin_ventana: env -u DISPLAY -u WAYLAND_DISPLAY valgrind --leak-check=full --track-origins=yes ./delivery_sim ../config/equipetrol.json

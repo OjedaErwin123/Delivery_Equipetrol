@@ -1,0 +1,7 @@
+Fecha: 2026-10-19 13:47 UTC
+Rama: docs/informe-final (29cb707)
+Sistema: Linux 6.18.54.1-microsoft-standard-WSL2 x86_64 (WSL2), WSLg
+Compilador: g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+ThreadSanitizer: el de g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0 (-fsanitize=thread -g -O1 -fno-omit-frame-pointer)
+Valgrind: valgrind-3.26.0
+OpenCV: 4.10.0

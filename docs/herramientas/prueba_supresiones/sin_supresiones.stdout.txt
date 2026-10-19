@@ -1,0 +1,4 @@
+hilos de OpenCV: 4
+DISPLAY=:0 WAYLAND_DISPLAY=wayland-0
+imagen: 933x1014
+frames: 29

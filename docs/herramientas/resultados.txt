@@ -1,0 +1,8 @@
+tsan_sin_supresiones: exit=66, salió 1.17 s después de SIGINT
+  check_log: 24 OK, 0 FALLA
+tsan: exit=0, salió 1.2 s después de SIGINT
+  check_log: 24 OK, 0 FALLA
+valgrind_con_ventana: exit=0, salió 2.28 s después de SIGINT
+  check_log: 24 OK, 0 FALLA
+valgrind_sin_ventana: exit=0, salió 1.1 s después de SIGINT
+  check_log: 24 OK, 0 FALLA

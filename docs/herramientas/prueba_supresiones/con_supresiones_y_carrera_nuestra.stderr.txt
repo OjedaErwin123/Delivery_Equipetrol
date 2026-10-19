@@ -1,0 +1,58 @@
+==================
+WARNING: ThreadSanitizer: data race (pid=8276)
+  Read of size 4 at 0x55555555a154 by main thread:
+    #0 main /mnt/c/Users/Display/AppData/Local/Temp/claude/--wsl-localhost-Ubuntu-home-aledrex-proyecto-equipe/a60c5f1d-2626-447c-b52b-ca8eebd87226/scratchpad/spike/spike.cpp:78 (spike-con+0x31f2) (BuildId: d2f0aee80d394e2752e010b0b65e8f7e20b6c35c)
+
+  Previous write of size 4 at 0x55555555a154 by thread T6:
+    #0 operator() /mnt/c/Users/Display/AppData/Local/Temp/claude/--wsl-localhost-Ubuntu-home-aledrex-proyecto-equipe/a60c5f1d-2626-447c-b52b-ca8eebd87226/scratchpad/spike/spike.cpp:59 (spike-con+0x294c) (BuildId: d2f0aee80d394e2752e010b0b65e8f7e20b6c35c)
+    #1 __invoke_impl<void, main(int, char**)::<lambda()> > /usr/include/c++/15/bits/invoke.h:63 (spike-con+0x294c)
+    #2 __invoke<main(int, char**)::<lambda()> > /usr/include/c++/15/bits/invoke.h:98 (spike-con+0x294c)
+    #3 _M_invoke<0> /usr/include/c++/15/bits/std_thread.h:303 (spike-con+0x294c)
+    #4 operator() /usr/include/c++/15/bits/std_thread.h:310 (spike-con+0x294c)
+    #5 _M_run /usr/include/c++/15/bits/std_thread.h:255 (spike-con+0x294c)
+    #6 <null> <null> (libstdc++.so.6+0xf5ef8) (BuildId: 3a7a8c6bd922e6314edb7a710fdc0293265c2c42)
+
+  Location is global 'racy' of size 4 at 0x55555555a154 (spike-con+0x6154)
+
+  Thread T6 (tid=8283, running) created by main thread at:
+    #0 pthread_create ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:1078 (libtsan.so.2+0x5cb02) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 std::thread::_M_start_thread(std::unique_ptr<std::thread::_State, std::default_delete<std::thread::_State> >, void (*)()) <null> (libstdc++.so.6+0xf5ff0) (BuildId: 3a7a8c6bd922e6314edb7a710fdc0293265c2c42)
+    #2 __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:59 (libc.so.6+0x2a600) (BuildId: 066527e430a32768d82741e00b81eebb1a872294)
+
+SUMMARY: ThreadSanitizer: data race /mnt/c/Users/Display/AppData/Local/Temp/claude/--wsl-localhost-Ubuntu-home-aledrex-proyecto-equipe/a60c5f1d-2626-447c-b52b-ca8eebd87226/scratchpad/spike/spike.cpp:78 in main
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=8276)
+  Write of size 4 at 0x55555555a154 by thread T6:
+    #0 operator() /mnt/c/Users/Display/AppData/Local/Temp/claude/--wsl-localhost-Ubuntu-home-aledrex-proyecto-equipe/a60c5f1d-2626-447c-b52b-ca8eebd87226/scratchpad/spike/spike.cpp:59 (spike-con+0x294c) (BuildId: d2f0aee80d394e2752e010b0b65e8f7e20b6c35c)
+    #1 __invoke_impl<void, main(int, char**)::<lambda()> > /usr/include/c++/15/bits/invoke.h:63 (spike-con+0x294c)
+    #2 __invoke<main(int, char**)::<lambda()> > /usr/include/c++/15/bits/invoke.h:98 (spike-con+0x294c)
+    #3 _M_invoke<0> /usr/include/c++/15/bits/std_thread.h:303 (spike-con+0x294c)
+    #4 operator() /usr/include/c++/15/bits/std_thread.h:310 (spike-con+0x294c)
+    #5 _M_run /usr/include/c++/15/bits/std_thread.h:255 (spike-con+0x294c)
+    #6 <null> <null> (libstdc++.so.6+0xf5ef8) (BuildId: 3a7a8c6bd922e6314edb7a710fdc0293265c2c42)
+
+  Previous write of size 4 at 0x55555555a154 by main thread:
+    #0 main /mnt/c/Users/Display/AppData/Local/Temp/claude/--wsl-localhost-Ubuntu-home-aledrex-proyecto-equipe/a60c5f1d-2626-447c-b52b-ca8eebd87226/scratchpad/spike/spike.cpp:78 (spike-con+0x3203) (BuildId: d2f0aee80d394e2752e010b0b65e8f7e20b6c35c)
+
+  As if synchronized via sleep:
+    #0 nanosleep ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:396 (libtsan.so.2+0x59dcf) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 void std::this_thread::sleep_for<long, std::ratio<1l, 1000l> >(std::chrono::duration<long, std::ratio<1l, 1000l> > const&) /usr/include/c++/15/bits/this_thread_sleep.h:82 (spike-con+0x29a1) (BuildId: d2f0aee80d394e2752e010b0b65e8f7e20b6c35c)
+    #2 operator() /mnt/c/Users/Display/AppData/Local/Temp/claude/--wsl-localhost-Ubuntu-home-aledrex-proyecto-equipe/a60c5f1d-2626-447c-b52b-ca8eebd87226/scratchpad/spike/spike.cpp:61 (spike-con+0x29a1)
+    #3 __invoke_impl<void, main(int, char**)::<lambda()> > /usr/include/c++/15/bits/invoke.h:63 (spike-con+0x29a1)
+    #4 __invoke<main(int, char**)::<lambda()> > /usr/include/c++/15/bits/invoke.h:98 (spike-con+0x29a1)
+    #5 _M_invoke<0> /usr/include/c++/15/bits/std_thread.h:303 (spike-con+0x29a1)
+    #6 operator() /usr/include/c++/15/bits/std_thread.h:310 (spike-con+0x29a1)
+    #7 _M_run /usr/include/c++/15/bits/std_thread.h:255 (spike-con+0x29a1)
+    #8 <null> <null> (libstdc++.so.6+0xf5ef8) (BuildId: 3a7a8c6bd922e6314edb7a710fdc0293265c2c42)
+
+  Location is global 'racy' of size 4 at 0x55555555a154 (spike-con+0x6154)
+
+  Thread T6 (tid=8283, running) created by main thread at:
+    #0 pthread_create ../../../../src/libsanitizer/tsan/tsan_interceptors_posix.cpp:1078 (libtsan.so.2+0x5cb02) (BuildId: 66d37dc704b813df6c813b77217284deb43a0042)
+    #1 std::thread::_M_start_thread(std::unique_ptr<std::thread::_State, std::default_delete<std::thread::_State> >, void (*)()) <null> (libstdc++.so.6+0xf5ff0) (BuildId: 3a7a8c6bd922e6314edb7a710fdc0293265c2c42)
+    #2 __libc_start_call_main ../sysdeps/nptl/libc_start_call_main.h:59 (libc.so.6+0x2a600) (BuildId: 066527e430a32768d82741e00b81eebb1a872294)
+
+SUMMARY: ThreadSanitizer: data race /mnt/c/Users/Display/AppData/Local/Temp/claude/--wsl-localhost-Ubuntu-home-aledrex-proyecto-equipe/a60c5f1d-2626-447c-b52b-ca8eebd87226/scratchpad/spike/spike.cpp:59 in operator()
+==================
+ThreadSanitizer: reported 2 warnings

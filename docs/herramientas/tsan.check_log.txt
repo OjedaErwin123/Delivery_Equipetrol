@@ -1,0 +1,27 @@
+mochila: máximo asignados sin entregar por moto = 3 (cupo 3)
+máximo de repartidores recogiendo a la vez / puestos: {'r0': '1/1', 'r1': '2/2', 'r2': '2/2', 'r3': '2/2', 'r4': '2/2', 'r5': '2/2', 'r6': '1/1'}
+líneas del log: 483 · pedidos: 117 · sin terminar: 35 · rechazados: 0 · simulationStopping t=2341987
+primera línea de stdout: OK
+todas las líneas del log son JSON válido: OK
+ciclo de vida en orden por pedido (completo, o cortado por la detención): OK
+t nunca retrocede por pedido: OK
+un solo dueño por pedido: cada traspaso sale del que lo tiene y lo siguiente es del receptor: OK
+created = líneas orderCreated: OK
+delivered = líneas orderDelivered: OK
+created = delivered + rejected + pending: OK
+pending = pedidos sin terminar en el log: OK
+rejected = pedidos creados y rechazados en el log: OK
+breakdowns = líneas courierBreakdown: OK
+reassigned = líneas orderReassigned: OK
+deliveredPerCourier = log: OK
+suma deliveredPerCourier = delivered: OK
+maxDeliveryMs = log: OK
+avgDeliveryMs = log: OK
+un solo simulationStopping: OK
+ningún orderCreated después de simulationStopping: OK
+todo orderCreated con t < t de simulationStopping: OK
+simulationStopping es la última línea del log: OK
+ningún evento con t mayor que el de simulationStopping: OK
+pickupSlots: nunca más repartidores recogiendo a la vez que puestos (según el log): OK
+cada recogida dura al menos los 30 s de entrega: OK
+bagCapacity: nunca más pedidos asignados sin entregar por moto que el cupo (según el log): OK
