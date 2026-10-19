@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <ostream>
 #include <string>
@@ -16,6 +17,20 @@ struct Event {
     std::string from;         // orderReassigned
     std::string to;           // orderReassigned
     std::string reason;       // orderRejected: queueFull | unreachable | noCourier
+    std::string destination;  // orderCreated: NO va en la línea; solo para los pedidos activos de la foto
+};
+
+// Los contadores del resumen (sección 6.3) en vivo, y los pedidos activos con su punto de entrega.
+// Se actualizan en write(), con el mismo lock con que se escribe la línea: una foto (stats()) es
+// siempre exactamente lo que ya está en el log, así el panel de la ventana nunca lo contradice.
+struct LiveStats {
+    int created = 0, delivered = 0, rejected = 0, reassigned = 0, breakdowns = 0;
+    std::int64_t totalDeliveryMs = 0, maxDeliveryMs = 0;  // de la creación a la entrega
+    std::map<std::string, int> deliveredPerCourier;
+    std::map<std::string, std::string> activeDestinations;  // pedido sin terminar -> nodo de entrega
+
+    int pending() const { return created - delivered - rejected; }
+    std::int64_t avgDeliveryMs() const { return delivered > 0 ? totalDeliveryMs / delivered : 0; }
 };
 
 // Arma la línea JSON de un evento (sin el salto de línea). No toca estado
@@ -36,7 +51,14 @@ public:
 
     void write(const Event& e);
 
+    // Una copia de los contadores, con el lock: lo que el log tiene escrito hasta ahora.
+    LiveStats stats() const;
+
 private:
-    std::mutex _mutex;
+    void count(const Event& e);  // con _mutex tomado
+
+    mutable std::mutex _mutex;
     std::ostream& _out;  // no es dueño: el stream lo crea y lo mantiene vivo quien crea el registro
+    LiveStats _stats;
+    std::map<std::string, std::int64_t> _createdAt;  // pedido sin terminar -> t de orderCreated
 };

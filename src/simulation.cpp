@@ -59,6 +59,7 @@ bool logOrderEvent(EventLog& log, const Shutdown& shutdown, const char* event, c
     e.order = order.id();
     if (reason == nullptr) {
         e.restaurant = order.restaurant();
+        e.destination = order.destination();  // no se escribe: es para los pedidos activos de la foto
     } else {
         e.reason = reason;
     }
@@ -402,7 +403,8 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
     return runSimulation(p, logOut, out, neverSignalled);
 }
 
-Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& out, const std::atomic<bool>& stopSignal)
+Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& out, const std::atomic<bool>& stopSignal,
+                      const FrameHook& onFrame)
 {
     EventLog log(logOut);
     OrderBook book(p.maxPending);
@@ -501,6 +503,19 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         if (stopSignal.load()) {
             stopped = bySignal = true;
             break;
+        }
+        if (onFrame) {
+            // La foto del frame: cada moto con su lock (una a la vez) y los contadores con el del log.
+            Frame frame;
+            frame.nowMs = clock.nowMs();
+            for (const auto& courier : couriers) {
+                frame.couriers.push_back(courier->view());
+            }
+            frame.stats = log.stats();
+            if (!onFrame(frame)) {
+                stopped = bySignal = true;  // se cerró la ventana: como una señal
+                break;
+            }
         }
         if (running.load() == 0) {
             break;  // fin natural: se entregaron todos los pedidos antes del fin

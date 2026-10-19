@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <functional>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -11,6 +12,8 @@
 #include <vector>
 
 #include "config.hpp"
+#include "courier.hpp"
+#include "event_log.hpp"
 #include "travel.hpp"
 
 // Ids "r0", "r1", ... (o "n0", ...): los valores por defecto de las pruebas.
@@ -78,13 +81,25 @@ struct Summary {
     std::vector<std::pair<std::string, int>> deliveredPerCourier;
 };
 
+// Una foto de la simulación en un frame, para dibujarla: cada moto (viaje y estado), los contadores
+// y los pedidos activos tal como están en el log en ese momento, y la hora simulada del frame.
+struct Frame {
+    std::int64_t nowMs = 0;
+    std::vector<CourierView> couriers;
+    LiveStats stats;
+};
+// Se llama en cada frame (~30 por segundo) desde el hilo principal. false = se cerró la ventana:
+// la simulación se detiene igual que con una señal.
+using FrameHook = std::function<bool(const Frame&)>;
+
 // Corre la simulación completa: imprime la línea de inicio en `out`, escribe los
 // eventos en `logOut`, y vuelve recién cuando todos los hilos terminaron (join).
 // Si se cumple `durationS`, registra simulationStopping, detiene todos los hilos y lo que
 // no se entregó queda pendiente (pending = created - delivered en el resumen).
-// Lo mismo si `stopSignal` se pone en true (lo pone el handler de SIGINT/SIGTERM).
+// Lo mismo si `stopSignal` se pone en true (lo pone el handler de SIGINT/SIGTERM), o si `onFrame`
+// devuelve false.
 Summary runSimulation(const SimParams& params, std::ostream& logOut, std::ostream& out,
-                      const std::atomic<bool>& stopSignal);
+                      const std::atomic<bool>& stopSignal, const FrameHook& onFrame = FrameHook());
 
 // Sin señal: solo termina por tiempo o al entregar todos los pedidos (lo usan las pruebas).
 Summary runSimulation(const SimParams& params, std::ostream& logOut, std::ostream& out);

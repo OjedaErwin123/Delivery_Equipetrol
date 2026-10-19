@@ -57,6 +57,17 @@
 // sigue con sus pedidos.
 constexpr std::int64_t kRepairMs = 300000;  // 5 min simulados
 
+// Cómo se dibuja una moto (sección 2): inactiva, rumbo a un restaurante (o a buscar comida heredada),
+// llevando pedidos, o averiada.
+enum class CourierStatus { idle, toRestaurant, carrying, broken };
+
+// Lo que la ventana necesita de una moto en un frame: su viaje (la posición sale de ahí) y su estado.
+struct CourierView {
+    std::string id;
+    Trip trip;
+    CourierStatus status;
+};
+
 class Courier {
 public:
     // `clock`, `log` y `shutdown` los crea quien crea las motos y viven hasta después del join.
@@ -108,6 +119,9 @@ public:
 
     // Su plan (viaje + pedidos de la mochila en orden FIFO), como copia: lo usan las estimaciones.
     CourierPlan plan() const;
+
+    // Viaje y estado, juntos (con el lock): una vista coherente para dibujar.
+    CourierView view() const;
 
     // Estadísticas: solo las escribe el hilo de la moto (en run); leerlas después del join.
     int delivered() const { return _delivered; }
@@ -183,7 +197,8 @@ private:
     bool _closed = false;
     bool _aborted = false;
     bool _exited = false;  // el hilo salió de run(): ya no puede recibir un traspaso
-    bool _broken = false;  // averiada: no acepta asignaciones (la flota lleva lo mismo para elegir motos)
+    bool _broken = false;  // averiada: no acepta asignaciones y se dibuja en rojo (la flota lleva lo mismo
+                           // para elegir motos)
     int _foodLeft = 0;     // comida suya que otra moto todavía tiene que venir a buscar
 
     int _delivered = 0;

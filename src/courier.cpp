@@ -164,6 +164,20 @@ Courier::Handover Courier::transferTo(Courier& to)
     return Handover::done;
 }
 
+CourierView Courier::view() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    CourierStatus status = CourierStatus::toRestaurant;
+    if (_broken) {
+        status = CourierStatus::broken;
+    } else if (_bag.empty()) {
+        status = CourierStatus::idle;
+    } else if (_bag.front().picked && !_bag.front().fetchAt) {
+        status = CourierStatus::carrying;  // lo próximo es llevarle a un cliente lo que ya tiene
+    }
+    return CourierView{_id, _trip, status};
+}
+
 void Courier::publish(const Trip& trip)
 {
     std::lock_guard<std::mutex> lock(_mutex);
