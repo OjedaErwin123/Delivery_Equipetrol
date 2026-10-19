@@ -170,6 +170,13 @@ add_executable(breakdown_check tests/breakdown_check.cpp src/simulation.cpp src/
 delivery_target_options(breakdown_check)
 add_test(NAME breakdown_check COMMAND breakdown_check)
 
+# Experimentos (DP.10): no es una prueba; se corre a mano (ver README).
+add_executable(delivery_experiments tools/experiments.cpp src/config.cpp src/simulation.cpp src/thread_pool.cpp
+               src/estimate.cpp src/road_graph.cpp src/courier.cpp src/travel.cpp src/restaurant.cpp src/fleet.cpp
+               src/order_book.cpp src/event_log.cpp)
+delivery_target_options(delivery_experiments)
+target_link_libraries(delivery_experiments PRIVATE nlohmann_json)
+
 add_executable(projection_check tests/projection_check.cpp)
 delivery_target_options(projection_check)
 add_test(NAME projection_check COMMAND projection_check)
