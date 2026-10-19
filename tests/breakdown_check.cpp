@@ -2,10 +2,13 @@
 // avería en cada viaje (y no entrega nada); con una probabilidad intermedia hay averías y entregas,
 // y mientras una moto está averiada no hace nada (no recoge ni entrega) durante su reparación.
 // El resumen cuenta exactamente las averías del log. Sale con 0 si todo está bien.
+#include <future>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "courier.hpp"
@@ -119,6 +122,44 @@ int main()
                     sometimes.summary.breakdowns == count(sometimes, "courierBreakdown") &&
                     sometimes.summary.delivered == 30 && count(sometimes, "orderDelivered") == 30);
     ok &= check("p = 0,3: averiada no recoge ni entrega hasta repararse", quietWhileBroken(sometimes));
+
+    // 5. Una moto averiada rechaza asignaciones. Es lo que pasaba entre el despachador y la avería: el
+    //    despachador reserva el cupo, la moto se avería y traspasa todo, y recién después llega la
+    //    asignación. Aquí la función de traspaso (corre en el hilo de la moto, ya averiada) traspasa la
+    //    mochila y enseguida intenta asignarle otro pedido: tiene que rechazarlo (full) sin moverlo.
+    {
+        const SimClock clock(1000.0);
+        const Shutdown shutdown;
+        std::ostringstream out;
+        EventLog log(out);
+        const std::shared_ptr<const World> world = paramsFromConfig(smallTown(1.0, 0)).world;
+        auto fleet = std::make_shared<Fleet>(2, 3);
+        auto a = std::make_shared<Courier>("c0", clock, log, shutdown, 1000, world, nullptr, fleet, 0, 1.0, 1);
+        auto b = std::make_shared<Courier>("c1", clock, log, shutdown, 1000, world, nullptr, fleet, 1, 0.0, 2);
+        std::promise<void> brokeOnce;
+        bool first = true;
+        OrderBook::Submit lateResult = OrderBook::Submit::accepted;
+        a->onBreakdown([&](Courier& broken) {
+            if (first) {
+                first = false;
+                broken.transferTo(*b);
+                Order late("o-late", "r0", "c", clock.nowMs());
+                lateResult = broken.assign(std::move(late), [] { return true; });
+                brokeOnce.set_value();
+            }
+            return true;
+        });
+        fleet->tryReserve(0);
+        a->assign(Order("o1", "r0", "c", clock.nowMs()));
+        std::thread worker(&Courier::run, a);
+        brokeOnce.get_future().wait();  // sin girar: el hilo de la moto avisa por el promise
+        a->close();
+        worker.join();
+        b->abort();
+        ok &= check("averiada: rechaza la asignación (full) y el pedido traspasado está en la otra",
+                    lateResult == OrderBook::Submit::full && a->plan().orders.empty() &&
+                        b->plan().orders.size() == 1 && b->plan().orders[0].destination == "c");
+    }
 
     // 4. Probabilidad 0: ninguna avería.
     const Run never = simulate(smallTown(0.0, 0), 10);
