@@ -76,6 +76,11 @@ public:
     // Asignarle un pedido (lo llama el despachador, ya con su hora de asignación): entra al final de
     // la mochila y despierta a la moto. closed si ya se cerró o abortó (el pedido no se mueve).
     OrderBook::Submit assign(Order&& order);
+    // Lo mismo, revalidando con el lock de la moto (check-then-act): el despachador reservó el cupo
+    // antes, y entre medio la moto pudo averiarse. Si está averiada devuelve `full` (ahora no puede) y
+    // el pedido no se mueve. Si no, `logAssigned` registra orderAssigned DENTRO de la misma sección
+    // crítica en que el pedido entra a la mochila (si devuelve false, se detuvo: `closed`, sin moverlo).
+    OrderBook::Submit assign(Order&& order, const std::function<bool()>& logAssigned);
     // No habrá más asignaciones: la moto termina lo que tiene y sale.
     void close();
     // Detención: la moto deja lo que tenga (queda pendiente) y sale.
@@ -137,8 +142,9 @@ private:
     // El pedido `id` de la mochila (lo busca por id: otros hilos pueden agregar pedidos). Con _mutex.
     std::deque<Carried>::iterator find(const std::string& id);
 
-    // handedOver: se averió en el camino y traspasó lo que llevaba (ya no tiene ese pedido).
-    enum class Leg { arrived, noPath, stopped, handedOver };
+    // interrupted: se averió en el camino. Lo que lleva pudo cambiar (lo traspasó, o le asignaron algo
+    // mientras tanto): no sigue el viaje a ciegas, vuelve a mirar su mochila.
+    enum class Leg { arrived, noPath, stopped, interrupted };
     // Un tramo hasta `place` (id de restaurante o de nodo): por el camino mínimo si hay mapa, o
     // `legMs` si no. noPath: no hay camino desde donde está (solo con mapas de evaluadores).
     Leg travel(const std::string& place, bool isRestaurant);
@@ -151,8 +157,7 @@ private:
     // ¿Se avería en este viaje? Si sí, en qué instante (entre la salida y la llegada).
     std::optional<std::int64_t> drawBreakdown(const Trip& trip);
     // La avería en `at`: quieta donde iba, fuera de la flota, y la reparación. false si se detuvo.
-    enum class Breakdown { kept, handedOver, stopped };
-    Breakdown breakDown(const Trip& trip, std::int64_t at);
+    bool breakDown(const Trip& trip, std::int64_t at);  // false si se detuvo
     Leg pickUp(const std::string& restaurant);  // la visita a `restaurant`: recoge todo lo suyo
     bool deliver(const std::string& id);        // registra la entrega y lo saca de la mochila
     void drop(const std::string& id);           // no puede llevarlo (sin camino): queda pendiente
@@ -178,6 +183,7 @@ private:
     bool _closed = false;
     bool _aborted = false;
     bool _exited = false;  // el hilo salió de run(): ya no puede recibir un traspaso
+    bool _broken = false;  // averiada: no acepta asignaciones (la flota lleva lo mismo para elegir motos)
     int _foodLeft = 0;     // comida suya que otra moto todavía tiene que venir a buscar
 
     int _delivered = 0;
