@@ -74,6 +74,16 @@ int main()
                 normal.events["orderAssigned"] == 30 && normal.summary.delivered == 30 &&
                     normal.summary.rejected == 0 && normal.err.empty());
 
+    // 1b. Estimando solo con la moto más cercana (candidateLimit = 1, para los experimentos): igual se
+    //     asignan y entregan los 30, y cada ronda de estimación quedó medida.
+    SimParams nearestOnly = paramsFromConfig(smallTown("a", 600000, false));
+    nearestOnly.orders = 30;
+    nearestOnly.candidateLimit = 1;
+    std::ostringstream nearestLog, nearestOut;
+    const Summary nearest = runSimulation(nearestOnly, nearestLog, nearestOut);
+    ok &= check("candidateLimit = 1: los 30 entregados y las rondas medidas",
+                nearest.delivered == 30 && nearest.estimateRoundMs.size() >= 30 && nearest.noCourier == 0);
+
     // 2. acceptTimeoutMs = 0: ningún pedido llega a asignarse a tiempo: todos noCourier.
     Run expired = simulate(smallTown("a", 0, false), 20);
     ok &= check("acceptTimeoutMs = 0: los 20 salen noCourier, ninguno asignado",
