@@ -10,7 +10,7 @@ Courier::Courier(std::string id, const SimClock& clock, EventLog& log, const Shu
                  std::shared_ptr<const Restaurants> restaurants, std::shared_ptr<Fleet> fleet, std::size_t index)
     : _id(std::move(id)), _clock(clock), _log(log), _shutdown(shutdown), _legMs(legMs), _world(std::move(world)),
       _restaurants(std::move(restaurants)), _fleet(std::move(fleet)), _index(index),
-      _node(_world ? _world->startNode : 0), _plan(Trip::stay(_node, 0))
+      _at(_world ? _world->startNode : 0), _plan(Trip::stay(_at, 0))
 {
 }
 
@@ -70,19 +70,19 @@ Courier::Leg Courier::travel(const std::string& place, bool isRestaurant)
         return _shutdown.sleepUntil(_clock.realTimeIn(_legMs)) ? Leg::stopped : Leg::arrived;
     }
     const std::size_t target = isRestaurant ? _world->restaurantNode.at(place) : *_world->graph.nodeIndex(place);
-    const std::optional<RoadGraph::Path> path = _world->graph.shortestPath(_node, target);
-    if (!path) {
+    const std::optional<Route> route = routeTo(_world->graph, _at, target);
+    if (!route) {
         return Leg::noPath;
     }
     // Se publica el viaje una vez y se duerme hasta la llegada: la posición en cada instante
     // sale del Trip (función del tiempo), la moto no despierta para "avanzar".
-    const Trip trip(_world->graph, *path, _clock.nowMs(), _world->metersPerMs);
+    const Trip trip(_world->graph, *route, _clock.nowMs(), _world->metersPerMs);
     publish(trip);
     if (_shutdown.sleepUntil(_clock.realTimeAt(trip.arrivalMs()))) {
         return Leg::stopped;
     }
-    _node = target;
-    publish(Trip::stay(target, trip.arrivalMs()));
+    _at = target;
+    publish(Trip::stay(_at, trip.arrivalMs()));
     return Leg::arrived;
 }
 

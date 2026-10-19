@@ -43,6 +43,11 @@ public:
     std::optional<std::size_t> nodeIndex(const std::string& id) const;
     const Coordinates& coordinates(std::size_t node) const { return _coordinates[node]; }
 
+    // ¿Se puede ir por una calle directo de `from` a `to`? (respeta el sentido único)
+    bool hasStreet(std::size_t from, std::size_t to) const;
+    // Largo en metros de la calle entre dos nodos: haversine, igual que el peso de su arista.
+    double streetMeters(std::size_t a, std::size_t b) const;
+
     // Camino mínimo de `from` a `to` por las calles (Dijkstra). std::nullopt si no hay camino.
     std::optional<Path> shortestPath(std::size_t from, std::size_t to) const;
 

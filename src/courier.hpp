@@ -106,7 +106,7 @@ private:
     const std::size_t _index;  // su lugar en la flota
     OrderBook _inbox;
 
-    std::size_t _node;              // dónde está; solo lo usa el hilo de la moto
+    Place _at;                      // dónde está (un nodo, o a mitad de una calle); solo lo usa el hilo de la moto
     mutable std::mutex _mutex;      // protege _plan, que leen otros hilos
     CourierPlan _plan;
 
