@@ -300,3 +300,62 @@ Pasar de 4 a 8 hilos en 4 núcleos solo gana un 14 %, con la eficiencia en 0,28.
 Frenar a todo el despachador deja que **varias** motos se vacíen a la vez, y el traspaso se hace con la primera que
 tiene lugar. **El experimento confirmó el diseño acordado.** Repartir la mochila entre varias motos se descartó sin
 implementarlo, porque el enunciado pide traspasar "a otro repartidor", en singular.
+
+## Análisis con herramientas
+
+La salida **completa y sin editar** de cada corrida está en [`docs/herramientas/`](docs/herramientas):
+- `versiones.txt`: las versiones de cada herramienta;
+- `comandos.txt`: los comandos exactos;
+- por corrida: `*.stderr.txt` (la salida de la herramienta), `*.stdout.txt` (el resumen), `*.events.log.gz` (el log)
+  y `*.check_log.txt` (el log verificado contra las reglas de las secciones 4, 6 y 7).
+
+**La corrida.** `config/equipetrol.json` completa, **con la ventana abierta**: ráfagas de hasta 12 pedidos, averías
+con p = 0,02 y traspasos. A los **40 s reales se le manda `SIGINT`** (`kill -INT`), así la corrida termina por señal,
+a mitad de su trabajo.
+
+**Herramientas:**
+- **ThreadSanitizer**, el de g++ 15.2, con el build `-DENABLE_TSAN=ON` (`-fsanitize=thread -g -O1`);
+- **Valgrind 3.26 Memcheck**, sobre el build normal, con `--leak-check=full --track-origins=yes`.
+
+| Corrida | Hallazgos | Salida tras `SIGINT` | Log |
+|---|---|---|---|
+| TSan, **sin** las supresiones (antes) | **5 reportes**, todos con la pila dentro de Qt5 y libdbus (el hilo `QDBusConnection` de Qt contra el hilo principal); ninguno en nuestro código. Salida 66 (la de TSan con reportes) | 1,17 s | 24 de 24 OK |
+| TSan, con las supresiones (después) | **0 reportes**, salida 0 | 1,20 s | 24 de 24 OK |
+| Memcheck, con ventana | 25 errores, todos en bibliotecas (ver abajo) | 2,28 s | 24 de 24 OK |
+| Memcheck, sin pantalla | **0 errores; 0 bytes perdidos** (definitely, indirectly y possibly) | 1,10 s | 24 de 24 OK |
+
+### Hallazgos y cambios
+
+1. **OpenCV paraleliza por dentro con TBB**, que el proyecto no puede usar. Bajo TSan, sus hilos daban reportes.
+   **Cambio:** `cv::setNumThreads(0)` ([src/window.cpp](src/window.cpp)); OpenCV dibuja en el hilo que lo llama, sin
+   crear hilos. Esos reportes desaparecieron sin suprimir nada.
+2. **Qt (el sistema de ventanas de este OpenCV) tiene carreras propias**, entre su hilo `QDBusConnection` y el hilo
+   principal: los 5 reportes de la primera fila. Probé variables de entorno para evitar ese hilo y ninguna sirvió.
+   **Cambio:** [src/tsan_suppressions.cpp](src/tsan_suppressions.cpp), compilado **solo** en el build de TSan, suprime
+   un reporte solo si su pila pasa por Qt, libdbus o GTK/GLib.
+   - **Que no esconde lo nuestro** lo muestra [`docs/herramientas/prueba_supresiones/`](docs/herramientas/prueba_supresiones),
+     un programa mínimo con ventana ([spike.cpp](docs/herramientas/prueba_supresiones/spike.cpp)):
+
+     | Programa mínimo | Reportes |
+     |---|---|
+     | Sin supresiones | 6 (Qt, DBus, TBB) |
+     | Con supresiones | 0 |
+     | Con supresiones y una carrera inyectada a propósito en `spike.cpp` | **2, los dos en `spike.cpp`** |
+3. **Un defecto nuestro, encontrado por la verificación bajo TSan** (no era una carrera sino un SEGV). Era un
+   check-then-act entre el despachador y la avería:
+   1. el despachador reservaba el cupo de una moto;
+   2. la moto se averiaba y traspasaba toda su mochila;
+   3. el despachador le entregaba el pedido igual.
+
+   La moto averiada seguía el viaje según lo que creía tener y fallaba al entregar.
+   **Cambio:** la moto revalida con su lock al recibir una asignación (si está averiada, la rechaza) y, después de una
+   avería, vuelve a leer su mochila. Hay una prueba determinística (`breakdown_check`, caso 5).
+   - Antes: `unreachable_check` bajo TSan, con 4 copias en paralelo, fallaba en la primera corrida.
+   - Después: 0 fallas en 200.
+4. **Lo que queda en Memcheck con la ventana abierta** es todo de bibliotecas:
+   - 1 "Invalid read" **dentro de OpenCV** (`libopencv_highgui`, su backend de Qt) al destruir la ventana: lee un
+     bloque que acaba de liberar. No destruirla lo evita, pero deja ~2,8 MB "possibly lost", así que se destruye;
+   - 18 "Conditional jump … uninitialised" en Qt y en bibliotecas sin símbolos;
+   - 256 bytes "definitely lost" y ~3 KB "possibly lost" en `libfontconfig`/`libexpat`, las fuentes que carga Qt.
+
+   **Sin ventana, el programa tiene 0 errores y 0 bytes perdidos**: nuestro código está limpio.
