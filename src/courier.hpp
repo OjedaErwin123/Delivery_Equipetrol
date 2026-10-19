@@ -51,9 +51,10 @@
 // Averías: al salir a cada viaje (con mapa) sortea si se avería, con su propio generador. Si toca,
 // se avería en un instante al azar del viaje: queda quieta en ese punto de la calle, la flota deja
 // de ofrecerla, traspasa toda su mochila (con `handOver`: elige el receptor y espera si hace falta)
-// y recién después se repara, en kRepairMs. Queda quieta ahí, sin pedidos. Si no queda ninguna otra
-// moto que pueda trabajar (todas averiadas o terminadas), se repara igual y sigue con sus pedidos.
-// Provisorio: los ya recogidos pasan al receptor como recogidos (el rescate llega en otro PR).
+// y queda quieta ahí. La comida que ya había recogido sigue con ella: el receptor la viene a buscar
+// (kRescueMs en el punto), y recién cuando le retiraron toda empieza la reparación (kRepairMs). Si
+// no queda ninguna otra moto que pueda trabajar (todas averiadas o terminadas), se repara igual y
+// sigue con sus pedidos.
 constexpr std::int64_t kRepairMs = 300000;  // 5 min simulados
 
 class Courier {
@@ -114,15 +115,22 @@ private:
     // Registra el evento salvo que se haya pedido parar o `t` ya pase el fin; false si no lo registró.
     bool logEvent(const char* event, const Order& order, std::int64_t t, bool withRestaurant);
 
-    // Un pedido en la mochila: lo asignado y si ya se recogió.
+    // Un pedido en la mochila: lo asignado y si ya se recogió. Si se heredó de una moto averiada
+    // después de recogido, la comida sigue allá: `fetchAt` es el punto de la avería y `foodWith` la
+    // moto que la tiene (no es dueño: todas las motos viven hasta después del join).
     struct Carried {
+        explicit Carried(Order assigned) : order(std::move(assigned)) {}
+
         Order order;
         bool picked = false;
+        std::optional<Place> fetchAt;
+        Courier* foodWith = nullptr;
     };
     // Lo que el hilo de la moto necesita saber del próximo pedido (una copia: se usa fuera del lock).
     struct Next {
         std::string id, restaurant, destination;
         bool picked;
+        std::optional<Place> fetchAt;
     };
     // Duerme sin CPU hasta tener un pedido; std::nullopt si se abortó, o se cerró y no queda nada.
     std::optional<Next> waitForWork();
@@ -134,6 +142,11 @@ private:
     // Un tramo hasta `place` (id de restaurante o de nodo): por el camino mínimo si hay mapa, o
     // `legMs` si no. noPath: no hay camino desde donde está (solo con mapas de evaluadores).
     Leg travel(const std::string& place, bool isRestaurant);
+    Leg travelTo(const Place& target);
+    // Ir al punto de una avería a buscar la comida heredada y avisarle a la moto que la tenía.
+    Leg rescue(const Place& spot);
+    // Otra moto se llevó `count` de la comida que esta moto averiada tenía (la que espera para repararse).
+    void foodCollected(int count);
     void publish(const Trip& trip);
     // ¿Se avería en este viaje? Si sí, en qué instante (entre la salida y la llegada).
     std::optional<std::int64_t> drawBreakdown(const Trip& trip);
@@ -165,6 +178,7 @@ private:
     bool _closed = false;
     bool _aborted = false;
     bool _exited = false;  // el hilo salió de run(): ya no puede recibir un traspaso
+    int _foodLeft = 0;     // comida suya que otra moto todavía tiene que venir a buscar
 
     int _delivered = 0;
     std::int64_t _totalDeliveryMs = 0;  // suma de (entregado - creado)
