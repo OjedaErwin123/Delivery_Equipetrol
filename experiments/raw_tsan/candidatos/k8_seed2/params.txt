@@ -1,0 +1,2 @@
+poolThreads=0 (0 = hardware_concurrency())
+candidateLimit=8 (0 = todas)

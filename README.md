@@ -195,3 +195,108 @@ bibliotecas, en código no instrumentado; una carrera inyectada a propósito en 
   - **reparación:** 5 min, desde que le retiraron la comida;
   - **sin otra moto que pueda trabajar:** se repara igual y sigue con sus pedidos.
 - **Ventana:** cerrarla detiene la simulación; sin pantalla, se simula igual.
+
+## Experimentos
+
+Los corre `delivery_experiments`, un programa aparte que no forma parte de `delivery_sim`, sin ventana, desde la raíz
+del repositorio:
+
+```sh
+build/delivery_experiments config/equipetrol.json experiments/raw todo
+# lo mismo con el build de TSan, solo el de candidatos:
+build-tsan/delivery_experiments config/equipetrol.json experiments/raw_tsan candidatos
+```
+
+- **Datos en bruto:** cada corrida de las tablas deja su `config.json` (se puede volver a correr con `delivery_sim`),
+  `params.txt`, `events.log.gz` y `summary.json` en `experiments/raw/<experimento>/<variante>_seed<n>/`.
+- **Condiciones comunes:** 1 hora simulada con `timeScale` 600 (6 s reales por corrida), build `RelWithDebInfo`
+  (`-O2`), 4 núcleos, WSL2.
+- **Qué se varía:** en cada experimento se cambia una sola cosa; todo lo demás es la configuración de
+  `equipetrol.json`.
+- **Tiempos:** los de ronda son **tiempo real**, desde que el despachador encola las estimaciones de un pedido hasta
+  que tiene los resultados.
+
+### 1. Candidatos: todas las motos contra las k más cercanas → **cambio de diseño**
+
+- **Qué se cambió:** con cuántas motos estima el despachador cada pedido: todas las que tienen lugar, o las k más
+  cercanas en línea recta al restaurante.
+- **Qué se mantuvo:** el escenario grande (64 motos, un pedido cada 1,5 s simulados), semillas 1–3, pool por defecto
+  (4 hilos).
+- **Qué se midió:** el tiempo de cada ronda de estimación y la calidad (entregados, `noCourier`, entrega media).
+
+| Candidatos | Build | Ronda media (ms) | p95 (ms) | Entregados | `queueFull` | Entrega media (min) |
+|---|---|---|---|---|---|---|
+| todas | normal (`-O2`) | 0,815 | 1,857 | 812,7 | 1375 | 13,22 |
+| k = 16 | normal | 0,688 | 1,840 | 788,3 | 1400 | 13,39 |
+| k = 8 | normal | 0,572 | 1,302 | 798,0 | 1389 | 13,29 |
+| todas | ThreadSanitizer | 8,686 | 12,314 | **579,3** | **1697** | 10,57 |
+| k = 16 | ThreadSanitizer | 2,880 | 4,918 | 778,0 | 1447 | 13,29 |
+| k = 8 | ThreadSanitizer | 2,043 | 4,263 | **782,7** | **1406** | 13,23 |
+
+**Conclusión:**
+- Con el build normal da casi igual: k = 8 hace la ronda un 30 % más corta y entrega un 1,8 % menos, dentro de la
+  diferencia entre semillas.
+- Cuando estimar es caro (bajo TSan, unas 10 veces más lento, como lo correrán los evaluadores, o en un mapa de
+  cientos de intersecciones), **el despachador se vuelve el cuello de botella**. Llega un pedido cada 2,5 ms reales y
+  cada ronda tarda 8,7 ms: el libro se llena, suben los `queueFull` (1406 → 1697) y **se entrega un 26 % menos**.
+- Con k = 8 la ronda (2,0 ms) queda por debajo del ritmo de llegada.
+
+**Cambio:** `delivery_sim` estima con las **8 motos con lugar más cercanas** (`kNearestCandidates`,
+`src/simulation.hpp`). Si ninguna de las 8 da una estimación usable (por ejemplo, porque están atrapadas), ese pedido
+se vuelve a estimar con todas. **Antes / después, bajo TSan: 579 → 783 entregados, ronda 8,7 → 2,0 ms.**
+
+### 2. Tamaño del pool de estimaciones
+
+- **Qué se cambió:** los hilos del pool (1, 2, 4, 8).
+- **Qué se mantuvo:** el mismo escenario grande, estimando con **todas** (para que haya trabajo), semillas 1–3.
+- **Qué se midió:** la ronda media, el speedup (ronda con 1 hilo / ronda con n) y la eficiencia (speedup / n).
+
+| Hilos | Ronda media (ms) | p95 (ms) | Speedup | Eficiencia | Entregados |
+|---|---|---|---|---|---|
+| 1 | 1,753 | 4,478 | 1,00 | 1,00 | 796,7 |
+| 2 | 1,234 | 2,959 | 1,42 | 0,71 | 808,3 |
+| 4 | 0,906 | 2,355 | 1,93 | 0,48 | 840,0 |
+| 8 | 0,778 | 1,893 | 2,25 | 0,28 | 818,7 |
+
+**Conclusión:** el speedup se ajusta a la **ley de Amdahl** con una parte secuencial de alrededor del 36 %.
+- **La parte secuencial:** el despachador encola, espera, ordena y copia el plan de cada moto con su lock, todo en un
+  solo hilo.
+- **La predicción:** con 4 hilos predice 1,93 (medido 1,93) y con 8 predice 2,27 (medido 2,25).
+
+Pasar de 4 a 8 hilos en 4 núcleos solo gana un 14 %, con la eficiencia en 0,28. **Confirma** la decisión de usar
+`hardware_concurrency()` hilos (fila 01 del mapa de conceptos): más hilos que núcleos casi no ayudan.
+
+### 3. Averías y capacidad de la mochila
+
+- **Qué se cambió:** `breakdownProbability` (0; 0,02; 0,1) con mochila 3, y `bagCapacity` (1, 3, 5) con p = 0,02.
+- **Qué se mantuvo:** `equipetrol.json` (8 motos), semillas 1–5 (promedios).
+
+| breakdownProbability | bagCapacity | Entregados | Rechazados | `noCourier` | Reasignados | Espera hasta el traspaso (mediana / p90) | Entrega media (min) |
+|---|---|---|---|---|---|---|---|
+| 0 | 3 | 118,0 | 23,2 | 16,0 | 0,0 | — | 10,66 |
+| 0,02 | 3 | 93,2 | 48,6 | 36,4 | 22,4 | 103 s / 426 s | 13,33 |
+| 0,1 | 3 | 67,0 | 76,2 | 62,0 | 49,6 | 50 s / 300 s | 16,41 |
+| 0,02 | 1 | 68,6 | 85,4 | 70,4 | 7,8 | 35 s / 119 s | 11,42 |
+| 0,02 | 5 | 107,2 | 28,6 | 16,6 | 28,2 | 1 s / 283 s | 12,17 |
+
+**Conclusión:**
+- **Las averías cuestan caro:** con p = 0,02 se entrega un 21 % menos y los `noCourier` se duplican.
+- **La causa no es la reparación sino el traspaso.** La averiada tiene que encontrar **una sola** moto con lugar para
+  **toda** su mochila, y con mochila 3 casi todas están llenas: la espera llega a 7 minutos simulados. Mientras tanto,
+  la prioridad del traspaso frena al despachador y los pedidos del libro se vencen.
+- **Con mochila 5** casi siempre hay lugar enseguida y los `noCourier` vuelven al valor sin averías.
+
+**Dos variantes probadas y descartadas, con sus números** (en `experiments/descartado/`):
+
+| p = 0,02, mochila 3 (5 semillas) | Prioridad global (la del programa) | Sin prioridad | Receptor designado |
+|---|---|---|---|
+| Entregados | **93,2** | 78,6 | 88,0 |
+| `noCourier` | **36,4** | 46,2 | 38,4 |
+
+- **Sin prioridad:** los pedidos quedan atrapados en las motos averiadas, que no consiguen receptor.
+- **Receptor designado:** se designa una sola moto receptora y el despachador deja de asignarle solo a ella. Depende
+  de que **esa** moto se vacíe, mientras las demás se siguen llenando.
+
+Frenar a todo el despachador deja que **varias** motos se vacíen a la vez, y el traspaso se hace con la primera que
+tiene lugar. **El experimento confirmó el diseño acordado.** Repartir la mochila entre varias motos se descartó sin
+implementarlo, porque el enunciado pide traspasar "a otro repartidor", en singular.

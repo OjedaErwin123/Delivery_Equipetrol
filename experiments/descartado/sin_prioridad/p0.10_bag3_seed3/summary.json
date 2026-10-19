@@ -1,0 +1,1 @@
+{"created": 257, "delivered": 65, "rejected": 123, "pending": 69, "reassigned": 60, "breakdowns": 21, "avgDeliveryMs": 1132380, "maxDeliveryMs": 2246048, "deliveredPerCourier": {"c0": 4, "c1": 7, "c2": 6, "c3": 10, "c4": 9, "c5": 12, "c6": 8, "c7": 9}}
