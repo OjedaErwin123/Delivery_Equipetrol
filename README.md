@@ -153,7 +153,7 @@ Por cada objeto que comparten varios hilos, la razón por la que no puede haber 
 | `Fleet` (cupos) | despachador, motos, principal | Monitor. "Elegir una moto con lugar y reservarle el cupo" es una sola operación con el lock tomado, así que no hay check-then-act entre hilos. |
 | Mochila, viaje y estado de cada `Courier` | su hilo, el despachador (`assign`, `plan`), otra moto (traspaso), la ventana (`view`) | Monitor de la moto: `_bag`, `_trip` y las banderas solo se tocan con su mutex. El traspaso toma los dos mutex juntos. Los demás leen copias. |
 | `_at`, `_rng` y estadísticas de una moto | solo su hilo | No se comparten mientras corre. Las estadísticas se leen después del `join`, que sincroniza. |
-| `Restaurant` (puestos y tickets) | las motos que llegan | Monitor; el ticket se toma con el lock, y eso fija el orden de llegada. |
+| `Restaurant` (puestos y tickets) | las motos que llegan | Monitor; el ticket se toma con el lock, y eso fija el orden de llegada. Las horas de llegada y de entrada al puesto se leen con ese mismo lock: si se leyeran antes, el log podría mostrar un desorden que no ocurrió. |
 | `EventLog` y sus contadores en vivo | todos los hilos, la ventana | Monitor: la línea y los contadores se escriben en la misma sección crítica; `stats()` copia con el lock. |
 | `Shutdown` | todos | Monitor; pedir parar y registrar `simulationStopping` son una sola operación. |
 | Cola del `ThreadPool` | despachador, hilos del pool | Monitor; cada trabajo corre fuera del lock. Su resultado viaja por su `promise`, que sincroniza. |
@@ -179,6 +179,10 @@ bibliotecas, en código no instrumentado; una carrera inyectada a propósito en 
   intercalado (asignaciones, `queueFull`, averías) puede variar entre corridas.
 - **Preparación:** uniforme en el rango del restaurante; empieza al asignar el pedido.
 - **Restaurante:** la entrega en el puesto tarda 30 s simulados, y la moto espera la comida con el puesto tomado.
+- **Orden de llegada en el log:** `pickupStarted` lleva una propiedad extra, `arrivedAt` (cuándo llegó la moto al
+  restaurante). Ningún evento de la lista dice cuándo llega una moto, y sin esa hora un programa que lee el log no
+  puede comprobar la atención por orden de llegada. Con ella, en cada restaurante, ordenando las visitas por
+  `arrivedAt`, los `t` de `pickupStarted` nunca bajan.
 - **Mochila:** `bagCapacity` cuenta los pedidos asignados. Una visita a un restaurante recoge todos los de ese
   restaurante, y se entrega en el orden de asignación.
 - **Despachador:**

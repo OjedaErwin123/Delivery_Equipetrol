@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <ostream>
 #include <string>
 
@@ -17,6 +18,7 @@ struct Event {
     std::string from;         // orderReassigned
     std::string to;           // orderReassigned
     std::string reason;       // orderRejected: queueFull | unreachable | noCourier
+    std::optional<std::int64_t> arrivedAt;  // pickupStarted: cuándo llegó la moto al restaurante (propio)
     std::string destination;  // orderCreated: NO va en la línea; solo para los pedidos activos de la foto
 };
 

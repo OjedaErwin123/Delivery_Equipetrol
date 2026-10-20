@@ -9,6 +9,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "sim_clock.hpp"
+
 // Cuánto dura entregar la comida en el puesto: el enunciado dice que consume tiempo simulado y
 // la configuración no trae el valor (decisión del proyecto).
 constexpr std::int64_t kHandoverMs = 30000;
@@ -32,7 +34,9 @@ public:
     // Move-only: un puesto lo tiene una sola moto a la vez.
     class Slot {
     public:
-        Slot(Slot&& other) noexcept : _restaurant(other._restaurant), _ticket(other._ticket)
+        Slot(Slot&& other) noexcept
+            : _restaurant(other._restaurant), _ticket(other._ticket), _arrivedAtMs(other._arrivedAtMs),
+              _startedAtMs(other._startedAtMs)
         {
             other._restaurant = nullptr;
         }
@@ -48,13 +52,23 @@ public:
 
         // Número de llegada: 0 para la primera moto que llegó, 1 para la segunda...
         std::uint64_t ticket() const { return _ticket; }
+        // Cuándo llegó (tomó el ticket) y cuándo tomó el puesto, en ms simulados. Los dos se leen
+        // con el lock del restaurante, junto con el ticket y con el turno: así el orden de las
+        // horas es el de los tickets (ver enter()).
+        std::int64_t arrivedAtMs() const { return _arrivedAtMs; }
+        std::int64_t startedAtMs() const { return _startedAtMs; }
 
     private:
         friend class Restaurant;
-        Slot(Restaurant& restaurant, std::uint64_t ticket) : _restaurant(&restaurant), _ticket(ticket) {}
+        Slot(Restaurant& restaurant, std::uint64_t ticket, std::int64_t arrivedAtMs, std::int64_t startedAtMs)
+            : _restaurant(&restaurant), _ticket(ticket), _arrivedAtMs(arrivedAtMs), _startedAtMs(startedAtMs)
+        {
+        }
 
         Restaurant* _restaurant;  // no es dueño: el restaurante vive más que cualquier puesto
         std::uint64_t _ticket;
+        std::int64_t _arrivedAtMs;
+        std::int64_t _startedAtMs;
     };
 
     Restaurant(std::string id, std::size_t pickupSlots);
@@ -65,7 +79,8 @@ public:
 
     // Llega una moto: hace fila y bloquea SIN consumir CPU hasta que sea su turno y haya un
     // puesto libre. Devuelve std::nullopt si se abortó (detención) antes o durante la espera.
-    std::optional<Slot> enter();
+    // `clock` da la hora de llegada y la de entrada al puesto que lleva el Slot.
+    std::optional<Slot> enter(const SimClock& clock);
 
     // Detención: despierta a todos los que hacen fila (enter devuelve std::nullopt) y hace que
     // los que lleguen después tampoco esperen. Los puestos ya tomados se liberan solos.

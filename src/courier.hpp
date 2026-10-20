@@ -132,7 +132,9 @@ public:
 
 private:
     // Registra el evento salvo que se haya pedido parar o `t` ya pase el fin; false si no lo registró.
-    bool logEvent(const char* event, const Order& order, std::int64_t t, bool withRestaurant);
+    // `arrivedAt` va solo en pickupStarted.
+    bool logEvent(const char* event, const Order& order, std::int64_t t, bool withRestaurant,
+                  std::optional<std::int64_t> arrivedAt = std::nullopt);
 
     // Un pedido en la mochila: lo asignado y si ya se recogió. Si se heredó de una moto averiada
     // después de recogido, la comida sigue allá: `fetchAt` es el punto de la avería y `foodWith` la

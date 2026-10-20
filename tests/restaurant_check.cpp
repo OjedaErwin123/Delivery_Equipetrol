@@ -13,6 +13,7 @@
 
 #include "log_line.hpp"
 #include "restaurant.hpp"
+#include "sim_clock.hpp"
 
 namespace {
 
@@ -24,6 +25,7 @@ void handover() { std::this_thread::sleep_for(std::chrono::microseconds(200)); }
 int main()
 {
     bool ok = true;
+    const SimClock clock(1000.0);  // 1 ms real = 1 s simulado: las horas distinguen llegadas cercanas
 
     // 1. Un puesto, 16 motos que llegan a la vez: entran de a una y en orden de ticket
     //    (el ticket es el orden en que llegaron al restaurante).
@@ -33,8 +35,8 @@ int main()
         std::vector<std::uint64_t> served;
         std::vector<std::thread> couriers;
         for (int i = 0; i < 16; ++i) {
-            couriers.emplace_back([&r, &m, &served] {
-                std::optional<Restaurant::Slot> slot = r.enter();
+            couriers.emplace_back([&r, &m, &served, &clock] {
+                std::optional<Restaurant::Slot> slot = r.enter(clock);
                 {
                     std::lock_guard<std::mutex> lock(m);
                     served.push_back(slot->ticket());  // con el puesto tomado: nadie más puede estar aquí
@@ -64,7 +66,7 @@ int main()
         for (int i = 0; i < 24; ++i) {
             couriers.emplace_back([&] {
                 for (int k = 0; k < 20; ++k) {
-                    std::optional<Restaurant::Slot> slot = r.enter();
+                    std::optional<Restaurant::Slot> slot = r.enter(clock);
                     {
                         std::lock_guard<std::mutex> lock(m);
                         ++inside;
@@ -92,13 +94,13 @@ int main()
     //    std::nullopt al abortar, y las que llegan después no esperan.
     {
         Restaurant r("r2", 1);
-        std::optional<Restaurant::Slot> held = r.enter();
+        std::optional<Restaurant::Slot> held = r.enter(clock);
         std::mutex m;
         int refused = 0;
         std::vector<std::thread> couriers;
         for (int i = 0; i < 5; ++i) {
-            couriers.emplace_back([&r, &m, &refused] {
-                const bool got = r.enter().has_value();
+            couriers.emplace_back([&r, &m, &refused, &clock] {
+                const bool got = r.enter(clock).has_value();
                 std::lock_guard<std::mutex> lock(m);
                 refused += got ? 0 : 1;
             });
@@ -108,7 +110,7 @@ int main()
             t.join();  // si abort no despertara a todos, esto se colgaría
         }
         ok &= check("abort: las 5 motos en fila vuelven sin puesto", refused == 5);
-        ok &= check("abort: una moto que llega después no espera", !r.enter());
+        ok &= check("abort: una moto que llega después no espera", !r.enter(clock));
         held.reset();
         ok &= check("abort: el puesto que estaba tomado se libera igual", r.inUse() == 0);
     }
@@ -116,7 +118,7 @@ int main()
     // 4. El puesto es move-only y se libera una sola vez, al destruirse su dueño final.
     {
         Restaurant r("r3", 2);
-        std::optional<Restaurant::Slot> a = r.enter();
+        std::optional<Restaurant::Slot> a = r.enter(clock);
         Restaurant::Slot moved(std::move(*a));
         a.reset();  // el Slot vacío (movido) no libera nada
         ok &= check("move: sigue ocupado tras mover y destruir el original", r.inUse() == 1);
@@ -124,6 +126,38 @@ int main()
             Restaurant::Slot last(std::move(moved));
         }
         ok &= check("move: se libera al destruirse el último dueño", r.inUse() == 0);
+    }
+
+    // 5. Las horas que lleva el Slot (las que van al log como arrivedAt y t de pickupStarted): con
+    //    2 puestos y 32 motos que llegan a la vez, quien llegó antes nunca toma el puesto después
+    //    (lo que un programa puede verificar mirando solo el log).
+    {
+        Restaurant r("r4", 2);
+        std::mutex m;
+        std::vector<std::pair<std::int64_t, std::int64_t>> times;  // (llegada, puesto)
+        std::vector<std::thread> couriers;
+        for (int i = 0; i < 32; ++i) {
+            couriers.emplace_back([&] {
+                std::optional<Restaurant::Slot> slot = r.enter(clock);
+                {
+                    std::lock_guard<std::mutex> lock(m);
+                    times.emplace_back(slot->arrivedAtMs(), slot->startedAtMs());
+                }
+                handover();
+            });
+        }
+        for (std::thread& t : couriers) {
+            t.join();
+        }
+        std::vector<std::pair<std::int64_t, std::int64_t>> byArrival = times;
+        std::sort(byArrival.begin(), byArrival.end());
+        bool fifo = byArrival.size() == 32, waited = true;
+        for (std::size_t i = 0; i < byArrival.size(); ++i) {
+            waited = waited && byArrival[i].first <= byArrival[i].second;
+            fifo = fifo && (i == 0 || byArrival[i - 1].second <= byArrival[i].second);
+        }
+        ok &= check("horas: nadie toma el puesto antes de llegar", waited);
+        ok &= check("horas: quien llegó antes no toma el puesto después (FIFO visible en el log)", fifo);
     }
 
     return ok ? 0 : 1;
