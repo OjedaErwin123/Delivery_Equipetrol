@@ -182,7 +182,8 @@ bibliotecas, en código no instrumentado; una carrera inyectada a propósito en 
 - **Orden de llegada en el log:** `pickupStarted` lleva una propiedad extra, `arrivedAt` (cuándo llegó la moto al
   restaurante). Ningún evento de la lista dice cuándo llega una moto, y sin esa hora un programa que lee el log no
   puede comprobar la atención por orden de llegada. Con ella, en cada restaurante, ordenando las visitas por
-  `arrivedAt`, los `t` de `pickupStarted` nunca bajan.
+  `arrivedAt`, los `t` de `pickupStarted` nunca bajan. Lo verifica `python3 tools/verificar_orden_llegada.py
+  build/events.log` (sale con 0 si se cumple, con 1 y la lista de violaciones si no).
 - **Mochila:** `bagCapacity` cuenta los pedidos asignados. Una visita a un restaurante recoge todos los de ese
   restaurante, y se entrega en el orden de asignación.
 - **Despachador:**
