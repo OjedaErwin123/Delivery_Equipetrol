@@ -34,6 +34,27 @@ mkdir build-tsan && cd build-tsan && cmake -DENABLE_TSAN=ON .. && make
   log inválidos, 2 para argumentos mal usados.
 - `ctest` corre las pruebas de cada pieza (`tests/`).
 
+## Dónde está cada criterio de la rúbrica
+
+| Criterio | Dónde está | Evidencia |
+|---|---|---|
+| DP.0 Compila y se ejecuta | [Compilar y ejecutar](#compilar-y-ejecutar), [Dependencias](#dependencias), `CMakeLists.txt` | Verificado con g++ 15.2, clang 21.1 y CMake 4.2.3 y 3.11.4: 0 warnings con `-Wall -Wextra`, también con `-DENABLE_TSAN=ON` |
+| DP.1 La ciudad es real; se respeta la configuración | [Mapa](#mapa), [Configuración](#configuración), `data/`, `docs/red_vial/` | 154 nodos, 219 calles, 7 restaurantes. `config_check`: 32 configuraciones inválidas rechazadas, cada una con su mensaje; las pruebas `delivery_sim_*` de `ctest`: salida ≠ 0 sin simular |
+| DP.2 Pedidos | [Decisiones](#decisiones-sobre-lo-que-el-enunciado-no-fija) (ráfagas, `maxPending`, reproducible) | `orders_check`, `order_book_check`, `unreachable_check` |
+| DP.3 Repartidores concurrentes; inactivo no cuesta | [Esquema](#esquema-del-programa): un hilo por moto que duerme sin CPU | `courier_check`, `travel_check`, `place_check` (sentido único), `bag_check`. Con 8 motos y 0 pedidos durante 20 s reales: **2 % de CPU** sin ventana y 15 % con ventana (dibujar 30 cuadros por segundo) |
+| DP.4 Despacho | Despachador y pool en el [Esquema](#esquema-del-programa); filas 04 del [Mapa de conceptos](#mapa-de-conceptos) | `pool_check`, `estimate_check`, `dispatch_check`; [experimento 1](#1-candidatos-todas-las-motos-contra-las-k-más-cercanas--cambio-de-diseño) |
+| DP.5 Recursos escasos | `Restaurant` (tickets FIFO), `Fleet`, `OrderBook` | `restaurant_check`, `pickup_check`; en cualquier log: `python3 tools/verificar_orden_llegada.py events.log` |
+| DP.6 Incidentes atómicos | Fila 06 "dos locks a la vez" del [Mapa de conceptos](#mapa-de-conceptos) | `transfer_check` (traspasos cruzados A→B y B→A a la vez, sin deadlock ni pedidos perdidos), `handover_check`, `breakdown_check`, `rescue_check` |
+| DP.7 El programa dice la verdad | `EventLog` en [Sin condiciones de carrera](#sin-condiciones-de-carrera) | `event_log_check`, `json_check`, `flow_check`; cada corrida de [DP.11](#análisis-con-herramientas) trae su log verificado (`*.check_log.txt`) |
+| Sin condiciones de carrera | [Sin condiciones de carrera](#sin-condiciones-de-carrera), [Análisis con herramientas](#análisis-con-herramientas) | TSan: 0 reportes en las pruebas y en `delivery_sim` |
+| DP.8 Se puede observar | [Compilar y ejecutar](#compilar-y-ejecutar) (la ventana) | `frame_check`, `projection_check` |
+| DP.9 Se detiene limpiamente | El handler y el bucle de frames en el [Esquema](#esquema-del-programa) | `stop_check`, `signal_check`; salida tras `SIGINT` en la tabla de [DP.11](#análisis-con-herramientas) |
+| DP.10 Experimentos | [Experimentos](#experimentos), `experiments/` | Tres experimentos con datos en bruto; el primero cambió el diseño |
+| DP.11 Herramientas | [Análisis con herramientas](#análisis-con-herramientas), `docs/herramientas/` | Salida cruda sin editar de TSan y Memcheck |
+| DP.12 Diseño explicado | [Esquema](#esquema-del-programa), [Mapa de conceptos](#mapa-de-conceptos) | — |
+
+Las pruebas (`tests/`) se corren con `ctest` desde `build/`.
+
 ## Dependencias
 
 | Dependencia | Versión usada | Mínimo | Cómo se obtiene |
@@ -42,6 +63,7 @@ mkdir build-tsan && cd build-tsan && cmake -DENABLE_TSAN=ON .. && make
 | g++ / clang++ | 15.2 / 21.1 | g++ 7 | Sistema |
 | OpenCV (`core imgproc imgcodecs highgui`) | 4.10.0 | 4.1 | Sistema (`libopencv-dev`) |
 | nlohmann/json | 3.12.0 | — | **Lo descarga CMake** al configurar (`FetchContent`) |
+| Python 3 | 3.14 | — | Sistema. **Solo** para los scripts de `tools/` (mapa, red vial, verificador del log); no hace falta para compilar ni correr |
 
 **`cmake ..` necesita conexión a internet la primera vez:** descarga los headers de nlohmann/json
 (`include.zip` del release oficial, ~300 KB) y verifica su SHA256. Queda en `build/_deps/`, así que las
@@ -119,7 +141,7 @@ flowchart LR
 | Generador ([src/simulation.cpp:78](src/simulation.cpp#L78)) | 1 | Llegadas de pedidos en ráfagas, durmiendo hasta cada una | El tope de pedidos o la detención; cierra el libro |
 | Despachador ([src/simulation.cpp:231](src/simulation.cpp#L231)) | 1 | Pedidos del libro, de a uno, en orden | El libro cerrado y vacío, o la detención; cierra las mochilas |
 | Pool de estimaciones ([src/thread_pool.cpp](src/thread_pool.cpp)) | `hardware_concurrency()` (2 si da 0) | Trabajos de la cola | El destructor del pool: cierra, descarta lo que no empezó y hace `join` |
-| Moto ([src/courier.cpp:399](src/courier.cpp#L399)) | `fleet.couriers` | El primer pedido de su mochila: viajar, recoger y entregar | Mochila cerrada y vacía, o la detención; avisa a la flota (`retire`) |
+| Moto ([src/courier.cpp:401](src/courier.cpp#L401)) | `fleet.couriers` | El primer pedido de su mochila: viajar, recoger y entregar | Mochila cerrada y vacía, o la detención; avisa a la flota (`retire`) |
 | Alcanzabilidad ([src/road_graph.cpp:56](src/road_graph.cpp#L56)) | 1 por restaurante | Un Dijkstra | Antes de empezar la simulación (`std::async` + `get`) |
 
 El handler de señales **solo** pone una bandera `std::atomic<bool>` lock-free
@@ -142,11 +164,11 @@ es la que permite el enunciado, así que no es espera activa. Al verla, ese bucl
 | `04` | Un promise/future como canal de un solo uso | [src/thread_pool.hpp:50–58](src/thread_pool.hpp#L50): cada trabajo del pool tiene su `std::promise`, y el despachador espera el `std::future`. A diferencia del future de `std::async`, este **no bloquea al destruirse**: una estimación tardía termina en el pool y nadie la espera, así que no congela al despachador. |
 | `04` | Una espera con límite de tiempo y una excepción que cruza de hilo | [src/simulation.cpp:261–266](src/simulation.cpp#L261): `wait_until` con `quoteTimeoutMs` en tiempo real; una estimación que falla lanza `EstimateError`, que viaja por `set_exception` y sale en `get()`. El despachador la reporta en stderr y sigue con los demás candidatos. |
 | `05` | Un argumento por cada objeto compartido de por qué no hay data race | La sección [Sin condiciones de carrera](#sin-condiciones-de-carrera), objeto por objeto. |
-| `05` | Un tipo seguro de mover porque sus funciones especiales son correctas | `Restaurant::Slot` ([src/restaurant.hpp:33](src/restaurant.hpp#L33)): el puesto se libera en el destructor; la copia está borrada, porque dos copias liberarían el puesto dos veces; y el constructor de movimiento deja el origen en `nullptr`, así que solo el destino lo libera. `Trip` sigue la regla de cero: solo tiene vectores y valores, así que las funciones especiales que genera el compilador copian bien. |
+| `05` | Un tipo seguro de mover porque sus funciones especiales son correctas | `Restaurant::Slot` ([src/restaurant.hpp:35](src/restaurant.hpp#L35)): el puesto se libera en el destructor; la copia está borrada, porque dos copias liberarían el puesto dos veces; y el constructor de movimiento deja el origen en `nullptr`, así que solo el destino lo libera. `Trip` sigue la regla de cero: solo tiene vectores y valores, así que las funciones especiales que genera el compilador copian bien. |
 | `06` | Exclusión mutua solo con locks RAII; secciones críticas cortas | Todos los mutex se toman con `lock_guard`, `unique_lock` o `scoped_lock`, nunca con `lock()`/`unlock()` a mano. Las secciones críticas copian y salen: la moto entrega una copia de su plan y la estimación (los Dijkstra) corre fuera del lock; el log arma la línea antes de tomar el suyo. |
 | `06` | Una operación con dos locks a la vez, sin deadlock | [src/courier.cpp:118](src/courier.cpp#L118): el traspaso por avería toma los mutex de las dos motos con `std::scoped_lock`. Si A le traspasa a B mientras B le traspasa a A, cada hilo pide los mismos dos locks al revés, la receta del deadlock; `scoped_lock` los toma con el algoritmo de `std::lock`, que lo evita. El resto sigue un orden global: motos → flota → `Shutdown` → log. |
 | `07` | Monitores: datos que no se tocan sin su lock | `OrderBook`, `Fleet`, `Restaurant`, `Shutdown`, `EventLog`, la cola del `ThreadPool` y la mochila de cada `Courier`: los datos son privados, y solo los tocan sus métodos, con el mutex tomado. |
-| `07` | Esperas con predicado, robustas a despertares espurios y al apagado | Cada `wait` lleva predicado: la moto sin pedidos ([src/courier.cpp:96](src/courier.cpp#L96)), la fila del restaurante por ticket ([src/restaurant.cpp:13](src/restaurant.cpp#L13)), el despachador esperando lugar ([src/fleet.cpp:62](src/fleet.cpp#L62)), los hilos del pool ([src/thread_pool.cpp:38](src/thread_pool.cpp#L38)) y las esperas de tiempo simulado ([src/shutdown.hpp:67](src/shutdown.hpp#L67)). Un despertar sin novedades vuelve a dormir. Para el apagado, cada monitor tiene su `abort()`/`close()` con `notify_all`, así nadie queda dormido. |
+| `07` | Esperas con predicado, robustas a despertares espurios y al apagado | Cada `wait` lleva predicado: la moto sin pedidos ([src/courier.cpp:96](src/courier.cpp#L96)), la fila del restaurante por ticket ([src/restaurant.cpp:17](src/restaurant.cpp#L17)), el despachador esperando lugar ([src/fleet.cpp:62](src/fleet.cpp#L62)), los hilos del pool ([src/thread_pool.cpp:38](src/thread_pool.cpp#L38)) y las esperas de tiempo simulado ([src/shutdown.hpp:67](src/shutdown.hpp#L67)). Un despertar sin novedades vuelve a dormir. Para el apagado, cada monitor tiene su `abort()`/`close()` con `notify_all`, así nadie queda dormido. |
 
 ## Sin condiciones de carrera
 
