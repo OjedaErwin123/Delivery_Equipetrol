@@ -1,5 +1,5 @@
-Fecha: 2026-10-19 13:47 UTC
-Rama: docs/informe-final (29cb707)
+Fecha: 2026-10-20 06:42 UTC
+Rama: fix/memcheck-ventana (las corridas se hicieron con el src/ del commit 61e3d9a, antes de commitearlo)
 Sistema: Linux 6.18.54.1-microsoft-standard-WSL2 x86_64 (WSL2), WSLg
 Compilador: g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0
 ThreadSanitizer: el de g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0 (-fsanitize=thread -g -O1 -fno-omit-frame-pointer)

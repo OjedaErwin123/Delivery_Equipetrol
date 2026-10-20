@@ -38,10 +38,16 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    const SimParams params = paramsFromConfig(config);
-    // La ventana vive en este hilo (el principal), el mismo del bucle de frames que la dibuja.
+    // La ventana vive en este hilo (el principal), el mismo del bucle de frames que la dibuja. Se abre
+    // ANTES de crear cualquier hilo (paramsFromConfig ya lanza los Dijkstra con std::async): así sus
+    // variables de entorno se ponen sin otros hilos, y la memoria de los hilos que crea Qt no aparece
+    // en Valgrind con la pila de un hilo nuestro (glibc reutiliza las pilas de hilos terminados).
     std::string whyNot;
-    const std::unique_ptr<MapWindow> window = MapWindow::open(config, params.world, whyNot);
+    const std::unique_ptr<MapWindow> window = MapWindow::open(config, whyNot);
+    const SimParams params = paramsFromConfig(config);
+    if (window) {
+        window->setWorld(params.world);
+    }
     FrameHook onFrame;
     // Cuándo se dibujó el último frame: ahí se vio la orden de parar (señal, tiempo o ventana). Lo
     // escribe y lo lee solo este hilo (el hook corre en el bucle de frames, en el hilo principal).

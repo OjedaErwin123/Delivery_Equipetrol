@@ -330,10 +330,12 @@ a mitad de su trabajo.
 
 | Corrida | Hallazgos | Salida tras `SIGINT` | Log |
 |---|---|---|---|
-| TSan, **sin** las supresiones (antes) | **5 reportes**, todos con la pila dentro de Qt5 y libdbus (el hilo `QDBusConnection` de Qt contra el hilo principal); ninguno en nuestro código. Salida 66 (la de TSan con reportes) | 1,17 s | 24 de 24 OK |
-| TSan, con las supresiones (después) | **0 reportes**, salida 0 | 1,20 s | 24 de 24 OK |
-| Memcheck, con ventana | 25 errores, todos en bibliotecas (ver abajo) | 2,28 s | 24 de 24 OK |
-| Memcheck, sin pantalla | **0 errores; 0 bytes perdidos** (definitely, indirectly y possibly) | 1,10 s | 24 de 24 OK |
+| TSan, **sin** las supresiones (antes) | **5 reportes**, todos con la pila dentro de Qt5 y libdbus (el hilo `QDBusConnection` de Qt contra el hilo principal); ninguno en nuestro código. Salida 66 (la de TSan con reportes) | 3,09 s | 27 de 27 OK |
+| TSan, con las supresiones (después) | **0 reportes**, salida 0 | 3,08 s | 27 de 27 OK |
+| Memcheck, con ventana | **4 errores**, todos en bibliotecas (eran 25; ver abajo) | 3,43 s | 27 de 27 OK |
+| Memcheck, sin pantalla | **0 errores; 0 bytes perdidos** (definitely, indirectly y possibly) | 1,15 s | 27 de 27 OK |
+
+Con ventana, la salida incluye los 2 s en que la ventana muestra el resumen antes de cerrarse.
 
 ### Hallazgos y cambios
 
@@ -363,10 +365,28 @@ a mitad de su trabajo.
    avería, vuelve a leer su mochila. Hay una prueba determinística (`breakdown_check`, caso 5).
    - Antes: `unreachable_check` bajo TSan, con 4 copias en paralelo, fallaba en la primera corrida.
    - Después: 0 fallas en 200.
-4. **Lo que queda en Memcheck con la ventana abierta** es todo de bibliotecas:
-   - 1 "Invalid read" **dentro de OpenCV** (`libopencv_highgui`, su backend de Qt) al destruir la ventana: lee un
-     bloque que acaba de liberar. No destruirla lo evita, pero deja ~2,8 MB "possibly lost", así que se destruye;
-   - 18 "Conditional jump … uninitialised" en Qt y en bibliotecas sin símbolos;
-   - 256 bytes "definitely lost" y ~3 KB "possibly lost" en `libfontconfig`/`libexpat`, las fuentes que carga Qt.
+4. **Memcheck con la ventana abierta: de 25 errores a 4.** Se revisó cada error, uno por uno, con corridas cortas.
+   **Se corrigió** lo que dependía de cómo usamos la ventana ([src/window.cpp](src/window.cpp),
+   [src/main.cpp](src/main.cpp)):
+
+   | Errores | Causa | Cambio |
+   |---|---|---|
+   | 18 "Conditional jump … uninitialised" en direcciones `???` | El **JIT de expresiones regulares** de Qt (PCRE2) genera código máquina en tiempo de ejecución, y Memcheck no puede seguir qué memoria inicializa: son falsos positivos | `QT_ENABLE_REGEXP_JIT=0`: la ventana no usa expresiones regulares |
+   | 3 "possibly lost" (2,6 KB) en Mesa (`libgallium`, `libGLX_mesa`) | Qt inicializaba **OpenGL**, que la ventana no usa: dibuja una imagen con `imshow` | `QT_XCB_GL_INTEGRATION=none` |
+   | 1 "possibly lost" (608 B) con un `std::async` nuestro en la pila | La memoria de un hilo de Qt que Qt nunca une. glibc le dio la pila que había dejado un hilo nuestro ya unido, y la traza nombraba nuestro código | La ventana se abre **antes** de crear nuestros hilos: el bloque sigue (es de Qt), pero la traza ya nombra a Qt |
+
+   El programa pone las dos variables con `setenv(..., 0)`: no pisa un valor que ya haya definido el usuario, y como
+   la ventana se abre antes de crear hilos, nadie lee el entorno mientras se modifica.
+
+   **Queda, y no se puede corregir desde nuestro código:**
+
+   | Error | Dónde | Por qué no se puede |
+   |---|---|---|
+   | 1 "Invalid read" al cerrar la ventana | `libopencv_highgui` (OpenCV 4.10, backend de Qt) | **Error de OpenCV** (`window_QT.cpp`): al destruir la **última** ventana, `isLastWindow()` borra su objeto `GuiReceiver` mientras todavía ejecuta un método de ese objeto, que después lee un miembro suyo. Sigue en la rama `4.x` actual de OpenCV. `destroyAllWindows()` da el mismo error, y no destruir la ventana deja ~2,8 MB "possibly lost" |
+   | 256 B "definitely lost" (+64 indirectos) | `libfontconfig` / `libexpat` | Una reserva que fontconfig hace una sola vez al leer su configuración de fuentes, cuando Qt carga las fuentes |
+   | 160 B "possibly lost" | `libQt5DBus` | Un hilo de DBus que crea Qt y nunca une. Probé variables de Qt (accesibilidad, tema) y no se puede evitar |
+   | ~620 B "possibly lost" | `libQt5XcbQpa` (`QXcbConnection` → `QThread::start`) | El hilo de eventos de X11 de Qt, que tampoco se une al salir |
+
+   No se usa un archivo de supresiones de Valgrind: la salida cruda muestra estos 4 tal cual.
 
    **Sin ventana, el programa tiene 0 errores y 0 bytes perdidos**: nuestro código está limpio.
