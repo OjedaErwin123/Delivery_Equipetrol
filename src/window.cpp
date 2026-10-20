@@ -95,13 +95,20 @@ struct MapWindow::Impl {
     }
 };
 
-std::unique_ptr<MapWindow> MapWindow::open(const Config& config, std::shared_ptr<const World> world,
-                                           std::string& whyNot)
+std::unique_ptr<MapWindow> MapWindow::open(const Config& config, std::string& whyNot)
 {
     if (!hasDisplay()) {
         whyNot = "no hay pantalla (DISPLAY y WAYLAND_DISPLAY vacías)";
         return nullptr;
     }
+    // Dos funciones de Qt que la ventana no usa y que bajo Valgrind dan errores que no son nuestros
+    // (README, DP.11): el JIT de expresiones regulares (PCRE2) genera código que Memcheck no puede
+    // seguir (18 "Conditional jump" falsos), y la integración con OpenGL carga Mesa, que deja memoria
+    // sin liberar (se dibuja una imagen con imshow, sin OpenGL). Sin pisar lo que ya defina el usuario
+    // (último argumento 0). setenv no es seguro con otros hilos leyendo el entorno: por eso la ventana
+    // se abre antes de crear hilos.
+    setenv("QT_ENABLE_REGEXP_JIT", "0", 0);
+    setenv("QT_XCB_GL_INTEGRATION", "none", 0);
     cv::setNumThreads(0);  // OpenCV sin hilos propios: todo en el hilo que dibuja
     auto impl = std::make_unique<Impl>();
     impl->map = cv::imread(config.mapImage, cv::IMREAD_COLOR);
@@ -111,10 +118,6 @@ std::unique_ptr<MapWindow> MapWindow::open(const Config& config, std::shared_ptr
     }
     impl->bounds = {config.north, config.south, config.west, config.east};
     impl->attribution = config.attribution;
-    impl->world = std::move(world);
-    for (const auto& restaurant : impl->world->restaurantNode) {
-        impl->restaurants.push_back(impl->pixel(impl->world->graph.coordinates(restaurant.second)));
-    }
     // WINDOW_NORMAL: la imagen se escala al tamaño de la ventana (KEEPRATIO: sin deformarse), y con
     // el backend Qt funcionan los botones de zoom y desplazamiento de su barra (con AUTOSIZE no).
     cv::namedWindow(kTitle, cv::WINDOW_NORMAL | cv::WINDOW_KEEPRATIO | cv::WINDOW_GUI_EXPANDED);
@@ -133,10 +136,23 @@ std::unique_ptr<MapWindow> MapWindow::open(const Config& config, std::shared_ptr
 
 MapWindow::MapWindow(std::unique_ptr<Impl> impl) : _impl(std::move(impl)) {}
 
+void MapWindow::setWorld(std::shared_ptr<const World> world)
+{
+    Impl& w = *_impl;
+    w.world = std::move(world);
+    w.restaurants.clear();
+    for (const auto& restaurant : w.world->restaurantNode) {
+        w.restaurants.push_back(w.pixel(w.world->graph.coordinates(restaurant.second)));
+    }
+}
+
 MapWindow::~MapWindow()
 {
-    // Valgrind marca un "Invalid read" DENTRO de OpenCV (su backend de Qt) al destruir la ventana;
-    // sin destruirla desaparece, pero quedan ~2,8 MB "possibly lost". Se destruye (ver README, DP.11).
+    // Valgrind marca un "Invalid read" DENTRO de OpenCV al destruir la última ventana: su backend de Qt
+    // (window_QT.cpp, también en la rama 4.x actual) borra su objeto GuiReceiver en isLastWindow()
+    // mientras todavía ejecuta un método de ese mismo objeto, y después lee un miembro suyo.
+    // destroyAllWindows() da lo mismo; sin destruirla quedan ~2,8 MB "possibly lost". Se destruye
+    // (ver README, DP.11).
     cv::destroyWindow(kTitle);
 }
 
