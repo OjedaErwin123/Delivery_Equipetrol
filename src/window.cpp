@@ -17,6 +17,9 @@
 namespace {
 
 const char* const kTitle = "Equipetrol Delivery";
+// Alto inicial de la ventana: el mapa (1014 px) no entra en una pantalla de 768. Se escala
+// manteniendo la proporción, y al agrandarla o maximizarla el mapa la ocupa entera.
+const int kInitialHeight = 620;
 
 // Colores (BGR), como la ilustración del enunciado.
 const cv::Scalar kIdle(140, 140, 140);         // gris: inactiva
@@ -64,6 +67,9 @@ std::string hms(std::int64_t ms)
     return buf;
 }
 
+// q, Q o Esc: terminar, como cerrar la ventana.
+bool isFinishKey(int key) { return key == 'q' || key == 'Q' || key == 27; }
+
 bool hasDisplay()
 {
     const char* x11 = std::getenv("DISPLAY");
@@ -79,6 +85,8 @@ struct MapWindow::Impl {
     std::string attribution;
     std::shared_ptr<const World> world;
     std::vector<cv::Point> restaurants;
+    cv::Mat last;                   // el último frame dibujado (para la pantalla final)
+    bool finishPressed = false;     // el botón "Terminar"; lo escribe su callback, en este mismo hilo
 
     cv::Point pixel(const Coordinates& c) const
     {
@@ -107,7 +115,19 @@ std::unique_ptr<MapWindow> MapWindow::open(const Config& config, std::shared_ptr
     for (const auto& restaurant : impl->world->restaurantNode) {
         impl->restaurants.push_back(impl->pixel(impl->world->graph.coordinates(restaurant.second)));
     }
-    cv::namedWindow(kTitle, cv::WINDOW_AUTOSIZE);
+    // WINDOW_NORMAL: la imagen se escala al tamaño de la ventana (KEEPRATIO: sin deformarse), y con
+    // el backend Qt funcionan los botones de zoom y desplazamiento de su barra (con AUTOSIZE no).
+    cv::namedWindow(kTitle, cv::WINDOW_NORMAL | cv::WINDOW_KEEPRATIO | cv::WINDOW_GUI_EXPANDED);
+    const double fit = std::min(1.0, static_cast<double>(kInitialHeight) / impl->map.rows);
+    cv::resizeWindow(kTitle, cvRound(impl->map.cols * fit), cvRound(impl->map.rows * fit));
+    // El botón va en el panel de propiedades de Qt (el último botón de la barra). Otros backends
+    // (GTK) no tienen botones: lanzan cv::Exception y quedan las teclas y la X.
+    try {
+        cv::createButton(
+            "Terminar", [](int, void* data) { static_cast<Impl*>(data)->finishPressed = true; }, impl.get(),
+            cv::QT_PUSH_BUTTON);
+    } catch (const cv::Exception&) {
+    }
     return std::unique_ptr<MapWindow>(new MapWindow(std::move(impl)));
 }
 
@@ -122,7 +142,7 @@ MapWindow::~MapWindow()
 
 bool MapWindow::draw(const Frame& frame)
 {
-    const Impl& w = *_impl;
+    Impl& w = *_impl;
     const RoadGraph& graph = w.world->graph;
     cv::Mat img = w.map.clone();
 
@@ -180,6 +200,40 @@ bool MapWindow::draw(const Frame& frame)
     text(img, credit, origin);
 
     cv::imshow(kTitle, img);
-    cv::waitKey(1);  // procesa los eventos de la ventana (no es para esperar: 1 ms)
-    return cv::getWindowProperty(kTitle, cv::WND_PROP_VISIBLE) >= 1;
+    w.last = img;
+    // waitKey procesa los eventos de la ventana (no es para esperar: 1 ms), y ahí corre el callback
+    // del botón: en este hilo, así que finishPressed no se comparte con nadie.
+    const int key = cv::waitKey(1);
+    return !isFinishKey(key) && !w.finishPressed && cv::getWindowProperty(kTitle, cv::WND_PROP_VISIBLE) >= 1;
+}
+
+void MapWindow::showFinal(const Summary& s, std::chrono::steady_clock::time_point until)
+{
+    Impl& w = *_impl;
+    if (w.last.empty() || cv::getWindowProperty(kTitle, cv::WND_PROP_VISIBLE) < 1) {
+        return;
+    }
+    cv::Mat img = w.last.clone();
+    const cv::Rect box(img.cols / 2 - 200, img.rows / 2 - 95, 400, 190);
+    cv::Mat area = img(box & cv::Rect(0, 0, img.cols, img.rows));
+    cv::Mat shade(area.size(), area.type(), kWhite);
+    cv::addWeighted(area, 0.15, shade, 0.85, 0, area);
+    cv::rectangle(img, box, kText, 2);
+    const int x = box.x + 20;
+    text(img, "Simulacion terminada", {x, box.y + 32}, 0.7);
+    text(img, "creados " + std::to_string(s.created) + "   entregados " + std::to_string(s.delivered), {x, box.y + 64});
+    text(img, "rechazados " + std::to_string(s.rejected) + "   pendientes " +
+                  std::to_string(s.created - s.delivered - s.rejected), {x, box.y + 88});
+    text(img, "reasignados " + std::to_string(s.reassigned) + "   averias " + std::to_string(s.breakdowns),
+         {x, box.y + 112});
+    text(img, "entrega media " + minutes(s.avgDeliveryMs) + "   maxima " + minutes(s.maxDeliveryMs), {x, box.y + 136});
+    text(img, "(el resumen completo esta en la terminal)", {x, box.y + 170}, 0.4);
+    cv::imshow(kTitle, img);
+    // Una pausa por frame mientras se muestra (regula los FPS: lo único que la ventana hace aquí);
+    // termina antes si se cierra la ventana, se aprieta una tecla o el botón.
+    while (std::chrono::steady_clock::now() < until) {
+        if (cv::waitKey(33) >= 0 || w.finishPressed || cv::getWindowProperty(kTitle, cv::WND_PROP_VISIBLE) < 1) {
+            break;
+        }
+    }
 }

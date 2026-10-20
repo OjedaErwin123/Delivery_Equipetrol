@@ -21,9 +21,14 @@ mkdir build-tsan && cd build-tsan && cmake -DENABLE_TSAN=ON .. && make
 - Termina:
   - al cumplirse `durationS` (con 0, solo por señal);
   - con `SIGINT` o `SIGTERM`;
-  - al cerrar la ventana.
+  - desde la ventana: cerrándola, con `q` o `Esc`, o con el botón **Terminar** (en el panel que abre el último
+    botón de la barra, solo con el OpenCV de Qt).
 
-  En todos los casos termina con salida 0, en menos de 5 s reales.
+  En todos los casos termina con salida 0, en menos de 5 s reales. Antes de salir, la ventana muestra el resumen
+  ("Simulacion terminada"): 2 s si se pidió parar (con eso, la salida queda en ~3,3 s bajo Valgrind), 5 s si se
+  cumplió `durationS`. Una tecla o la X la cierran antes.
+- La ventana se puede agrandar o maximizar: el mapa se escala sin deformarse. Con el OpenCV de Qt, la barra de
+  arriba tiene zoom, desplazamiento y guardar imagen.
 - Sin pantalla (`DISPLAY` y `WAYLAND_DISPLAY` vacías) avisa en stderr y simula igual, sin ventana.
 - Una configuración inválida o un mal uso salen con un mensaje en stderr, sin simular: código 1 para configuración o
   log inválidos, 2 para argumentos mal usados.
@@ -199,7 +204,8 @@ bibliotecas, en código no instrumentado; una carrera inyectada a propósito en 
   - **rescate:** los pedidos ya recogidos se van a buscar al punto de la avería (15 s);
   - **reparación:** 5 min, desde que le retiraron la comida;
   - **sin otra moto que pueda trabajar:** se repara igual y sigue con sus pedidos.
-- **Ventana:** cerrarla detiene la simulación; sin pantalla, se simula igual.
+- **Ventana:** cerrarla (o `q`, `Esc`, el botón Terminar) detiene la simulación; sin pantalla, se simula igual. Al
+  terminar muestra el resumen 2 s (5 s si terminó por tiempo).
 
 ## Experimentos
 

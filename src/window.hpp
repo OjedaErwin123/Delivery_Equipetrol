@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -25,8 +26,13 @@ public:
     MapWindow(const MapWindow&) = delete;
     MapWindow& operator=(const MapWindow&) = delete;
 
-    // Dibuja un frame. false si el usuario cerró la ventana (la simulación se detiene).
+    // Dibuja un frame. false si el usuario pidió terminar: cerró la ventana, apretó q o Esc, o el
+    // botón "Terminar" del panel de propiedades (la simulación se detiene como con una señal).
     bool draw(const Frame& frame);
+
+    // Al terminar: deja el último frame con el resumen encima hasta `until` (o hasta que se cierre la
+    // ventana o se apriete una tecla), para que se vea cómo terminó. Con la ventana ya cerrada, nada.
+    void showFinal(const Summary& summary, std::chrono::steady_clock::time_point until);
 
 private:
     struct Impl;  // los tipos de OpenCV quedan en window.cpp
