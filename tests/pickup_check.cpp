@@ -1,6 +1,7 @@
 // Prueba de la recogida en el restaurante con motos reales: nunca más pedidos recogiéndose a la
 // vez que puestos (mirando solo el log: de pickupStarted a orderPickedUp), la moto espera la
-// comida y la entrega dura kHandoverMs, y la detención despierta a las motos que hacen fila.
+// comida y la entrega dura kHandoverMs, quien llegó antes no toma el puesto después (también
+// mirando solo el log, con arrivedAt), y la detención despierta a las motos que hacen fila.
 // Sale con 0 si todo está bien.
 #include <algorithm>
 #include <chrono>
@@ -22,7 +23,7 @@ namespace {
 constexpr double kTimeScale = 1000.0;  // 1 s simulado = 1 ms real: 30 s de entrega = 30 ms reales
 
 struct Pickup {
-    std::int64_t started = -1, picked = -1;
+    std::int64_t arrived = -1, started = -1, picked = -1;
 };
 
 // Corre `count` motos (sin mapa, tramos de 1 s) con un pedido cada una al restaurante r0 de
@@ -55,7 +56,12 @@ std::map<std::string, Pickup> run(int count, std::size_t slots, std::int64_t pre
     std::map<std::string, Pickup> pickups;
     std::istringstream in(out.str());
     for (std::string line; std::getline(in, line);) {
-        if (field(line, "event") == "pickupStarted") pickups[field(line, "order")].started = timeOf(line);
+        if (field(line, "event") == "pickupStarted") {
+            Pickup& p = pickups[field(line, "order")];
+            p.started = timeOf(line);
+            const auto at = line.find("\"arrivedAt\": ");
+            p.arrived = at == std::string::npos ? -1 : std::stoll(line.substr(at + 13));
+        }
         if (field(line, "event") == "orderPickedUp") pickups[field(line, "order")].picked = timeOf(line);
     }
     return pickups;
@@ -76,6 +82,26 @@ int maxAtOnce(const std::map<std::string, Pickup>& pickups)
         most = std::max(most, now);
     }
     return most;
+}
+
+// Orden de llegada según el log: ordenadas por arrivedAt, las horas de pickupStarted no bajan
+// (quien llegó antes no toma el puesto después), y nadie empieza antes de llegar.
+bool firstComeFirstServed(const std::map<std::string, Pickup>& pickups)
+{
+    std::vector<std::pair<std::int64_t, std::int64_t>> byArrival;
+    for (const auto& p : pickups) {
+        if (p.second.arrived < 0 || p.second.arrived > p.second.started) {
+            return false;
+        }
+        byArrival.emplace_back(p.second.arrived, p.second.started);
+    }
+    std::sort(byArrival.begin(), byArrival.end());
+    for (std::size_t i = 1; i < byArrival.size(); ++i) {
+        if (byArrival[i - 1].second > byArrival[i].second) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -99,11 +125,13 @@ int main()
     ok &= check("1 puesto: nunca más de 1 recogiendo a la vez (según el log)", maxAtOnce(one) == 1);
     ok &= check("la entrega en el puesto dura kHandoverMs", handover);
     ok &= check("nadie recoge antes de que la comida esté lista + la entrega", waitedFood);
+    ok &= check("1 puesto: en orden de llegada (según arrivedAt del log)", firstComeFirstServed(one));
 
     // 2. Dos puestos, 4 motos: nunca más de 2 a la vez.
     const auto two = run(4, 2, 0, assignedAt);
     std::cout << "2 puestos: máximo recogiendo a la vez = " << maxAtOnce(two) << "\n";
     ok &= check("2 puestos: los 4 recogidos y nunca más de 2 a la vez", two.size() == 4 && maxAtOnce(two) <= 2);
+    ok &= check("2 puestos: en orden de llegada (según arrivedAt del log)", firstComeFirstServed(two));
 
     // 3. Detención con motos en la fila: abort del restaurante + orden de parar. Todas terminan.
     const SimClock clock(kTimeScale);

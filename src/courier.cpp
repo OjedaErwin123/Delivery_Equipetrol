@@ -328,7 +328,7 @@ Courier::Leg Courier::pickUp(const std::string& restaurant)
     // puesto al destruirse (RAII), en cualquier salida. (Slot es move-only sin asignación: el
     // optional se construye directamente con el resultado.)
     std::optional<Restaurant::Slot> slot =
-        _restaurants ? _restaurants->at(restaurant)->enter() : std::optional<Restaurant::Slot>();
+        _restaurants ? _restaurants->at(restaurant)->enter(_clock) : std::optional<Restaurant::Slot>();
     if (_restaurants && !slot) {
         return Leg::stopped;
     }
@@ -336,13 +336,15 @@ Courier::Leg Courier::pickUp(const std::string& restaurant)
     // también los asignados mientras viajaba o hacía fila. Un evento negado (se pidió parar, o su
     // t ya pasó el fin) corta: los pedidos quedan pendientes.
     std::vector<std::string> here;
-    const std::int64_t startedAt = _clock.nowMs();
+    // Las horas del puesto, leídas por el restaurante con su lock (en orden de ticket).
+    const std::int64_t startedAt = slot ? slot->startedAtMs() : _clock.nowMs();
+    const std::int64_t arrivedAt = slot ? slot->arrivedAtMs() : startedAt;
     std::int64_t readyAt = startedAt;
     {
         std::lock_guard<std::mutex> lock(_mutex);
         for (const Carried& c : _bag) {
             if (!c.picked && c.order.restaurant() == restaurant) {
-                if (!logEvent("pickupStarted", c.order, startedAt, true)) {
+                if (!logEvent("pickupStarted", c.order, startedAt, true, arrivedAt)) {
                     return Leg::stopped;
                 }
                 here.push_back(c.order.id());
@@ -451,7 +453,8 @@ void Courier::run()
     }
 }
 
-bool Courier::logEvent(const char* event, const Order& order, std::int64_t t, bool withRestaurant)
+bool Courier::logEvent(const char* event, const Order& order, std::int64_t t, bool withRestaurant,
+                       std::optional<std::int64_t> arrivedAt)
 {
     Event e;
     e.t = t;
@@ -461,5 +464,6 @@ bool Courier::logEvent(const char* event, const Order& order, std::int64_t t, bo
     if (withRestaurant) {
         e.restaurant = order.restaurant();
     }
+    e.arrivedAt = arrivedAt;
     return _shutdown.unlessStopped(t, [this, &e] { _log.write(e); });
 }

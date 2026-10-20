@@ -53,6 +53,11 @@ std::string toJsonLine(const Event& e)
     appendField(line, "from", e.from);
     appendField(line, "to", e.to);
     appendField(line, "reason", e.reason);
+    if (e.arrivedAt) {
+        // Propiedad extra (no está en la tabla 6.2): sin ella, el log no permite verificar la
+        // atención por orden de llegada en los restaurantes.
+        line += ", \"arrivedAt\": " + std::to_string(*e.arrivedAt);
+    }
     line += '}';
     return line;
 }
