@@ -19,8 +19,11 @@ class MapWindow {
 public:
     // Abre la ventana, o devuelve nullptr y explica por qué en `whyNot` (sin pantalla, o la imagen del
     // mapa no se puede leer). Sin pantalla no se llama a OpenCV: su backend gráfico aborta el proceso.
-    static std::unique_ptr<MapWindow> open(const Config& config, std::shared_ptr<const World> world,
-                                           std::string& whyNot);
+    // Se llama ANTES de crear cualquier hilo (ver main.cpp): pone variables de entorno para Qt.
+    static std::unique_ptr<MapWindow> open(const Config& config, std::string& whyNot);
+
+    // El mundo que se dibuja (calles y restaurantes). Se pasa antes del primer draw().
+    void setWorld(std::shared_ptr<const World> world);
 
     ~MapWindow();
     MapWindow(const MapWindow&) = delete;

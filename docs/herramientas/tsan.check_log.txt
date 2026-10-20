@@ -1,6 +1,6 @@
 mochila: máximo asignados sin entregar por moto = 3 (cupo 3)
 máximo de repartidores recogiendo a la vez / puestos: {'r0': '1/1', 'r1': '2/2', 'r2': '2/2', 'r3': '2/2', 'r4': '2/2', 'r5': '2/2', 'r6': '1/1'}
-líneas del log: 483 · pedidos: 117 · sin terminar: 35 · rechazados: 0 · simulationStopping t=2341987
+líneas del log: 483 · pedidos: 117 · sin terminar: 35 · rechazados: 0 · simulationStopping t=2345054
 primera línea de stdout: OK
 todas las líneas del log son JSON válido: OK
 ciclo de vida en orden por pedido (completo, o cortado por la detención): OK
@@ -22,6 +22,9 @@ ningún orderCreated después de simulationStopping: OK
 todo orderCreated con t < t de simulationStopping: OK
 simulationStopping es la última línea del log: OK
 ningún evento con t mayor que el de simulationStopping: OK
+todo pickupStarted trae arrivedAt <= t: OK
+una visita tiene una sola hora de llegada: OK
+restaurantes: en orden de llegada (quien llegó antes no toma el puesto después): OK
 pickupSlots: nunca más repartidores recogiendo a la vez que puestos (según el log): OK
 cada recogida dura al menos los 30 s de entrega: OK
 bagCapacity: nunca más pedidos asignados sin entregar por moto que el cupo (según el log): OK

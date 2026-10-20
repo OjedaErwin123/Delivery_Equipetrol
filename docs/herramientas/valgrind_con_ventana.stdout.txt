@@ -1,2 +1,2 @@
 Simulation has started...
-{"created": 42, "delivered": 17, "rejected": 0, "pending": 25, "reassigned": 1, "breakdowns": 1, "avgDeliveryMs": 588196, "maxDeliveryMs": 833368, "deliveredPerCourier": {"c0": 3, "c1": 3, "c2": 2, "c3": 3, "c4": 2, "c5": 1, "c6": 0, "c7": 3}}
+{"created": 71, "delivered": 35, "rejected": 0, "pending": 36, "reassigned": 1, "breakdowns": 1, "avgDeliveryMs": 732195, "maxDeliveryMs": 1191973, "deliveredPerCourier": {"c0": 4, "c1": 6, "c2": 5, "c3": 5, "c4": 4, "c5": 3, "c6": 3, "c7": 5}}
