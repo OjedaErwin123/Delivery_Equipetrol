@@ -6,6 +6,9 @@ dibujada en vivo sobre un mapa real de OpenStreetMap.
 Datos del mapa © OpenStreetMap contributors, disponibles bajo la licencia ODbL
 (<https://www.openstreetmap.org/copyright>).
 
+Este README es el informe final. [`docs/informe/informe.pdf`](docs/informe/informe.pdf) es un resumen en PDF
+(9 páginas) para presentarlo: diseño, decisiones, experimentos y herramientas.
+
 ## Compilar y ejecutar
 
 ```sh
@@ -412,3 +415,16 @@ Con ventana, la salida incluye los 2 s en que la ventana muestra el resumen ante
    No se usa un archivo de supresiones de Valgrind: la salida cruda muestra estos 4 tal cual.
 
    **Sin ventana, el programa tiene 0 errores y 0 bytes perdidos**: nuestro código está limpio.
+
+## Uso de inteligencia artificial
+
+En el desarrollo de este proyecto **se usó inteligencia artificial**: Claude, de Anthropic, a través de Claude Code,
+como asistente de programación. Se usó para:
+- discutir el diseño y las alternativas de cada componente, a la luz de los ejemplos del curso;
+- escribir buena parte del código, las pruebas y los scripts de `tools/`;
+- correr la verificación de cada cambio (builds, ThreadSanitizer, Valgrind, mediciones) y los experimentos;
+- redactar la documentación: este README, las descripciones de los PRs y el informe en PDF.
+
+Las decisiones las tomó el autor. Las ambigüedades del enunciado se le presentaron como opciones con su justificación y
+él eligió. Cada cambio entró por un PR revisado por el autor antes del merge. Los commits hechos con asistencia llevan
+la línea `Co-Authored-By: Claude`, así que el historial del repositorio muestra qué partes se hicieron así.
