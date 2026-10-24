@@ -56,7 +56,7 @@ El resumen agrega, **solo si la configuración trae `kitchen`**:
 | El calendario | `PauseSchedule` en `src/restaurant.hpp` | Es **la única** cuenta de las pausas. La usan el restaurante (el mecanismo) y el hilo del calendario (los eventos), así que el log y el mecanismo no pueden contradecirse. Es inmutable y se lee sin lock |
 | “No se toma un puesto en pausa” | `Restaurant::enter`, el monitor que ya tenía los puestos y los tickets | Es una condición más para tomar un puesto, y tiene que evaluarse con el mismo lock que el turno y `_inUse` |
 | Los eventos de pausa | un hilo nuevo, `markPauses`, en `src/simulation.cpp` | Tienen que escribirse aunque no haya ninguna moto en el restaurante, y ningún hilo existente despierta en esos instantes |
-| `pickupsDelayedByPause` | `Restaurant::enter`, al tomar el puesto | Ahí se conocen `arrivedAt` y `startedAt` de la visita, en una sola sección crítica: no hay doble conteo |
+| `pickupsDelayedByPause` | lo calcula `Restaurant::enter` al dar el puesto (va en el `Slot`) y lo suma la moto cuando su `pickupStarted` quedó en el log | El restaurante conoce `arrivedAt` y `startedAt` en una sola sección crítica, así que no hay doble conteo. Sumarlo recién con el evento registrado hace que el resumen sea exactamente lo que se recalcula desde el log |
 | Configuración y resumen | `src/config.*`, `Summary`, `toJson` | Donde ya se validaba y se imprimía todo lo demás |
 
 ### El mecanismo: calendario calculado y espera con plazo
@@ -77,8 +77,9 @@ for (;;) {
 - **La espera tiene plazo porque el fin de la pausa no lo avisa nadie:** lo trae el paso del tiempo. Una moto que espera
   su turno o un puesto sigue con `wait`, porque eso sí lo cambia otra moto. En cada vuelta la moto duerme: no hay espera
   activa.
-- **Es exacto por construcción:** la pausa se pregunta con el lock tomado y con el mismo reloj con que se leen
-  `arrivedAt` y `startedAt`, así que ningún `startedAt` cae dentro de una pausa.
+- **Es exacto por construcción:** la pausa se pregunta con el lock tomado, y `startedAt` es **la misma lectura del
+  reloj** que decidió que no estaba en pausa. Si se leyera de nuevo, entre las dos lecturas podría empezar una pausa y
+  el log mostraría una entrada dentro de ella.
 - **El `+ 1`:** `nowMs()` trunca. Al despertar justo en el fin, la cuenta podría dar `fin − 1`, la moto seguiría “en
   pausa” y volvería enseguida con el plazo ya vencido, girando.
 - **Detención:** `abort()` hace `notify_all` y despierta también a las motos que esperan con plazo.
@@ -96,6 +97,10 @@ pausa: un check-then-act con el tiempo.
   con el mismo lock que `request()`, la función que escribe `simulationStopping`. El evento se escribe antes de la orden
   de parar o se niega. Además, se niega todo `t ≥ fin`: si una pausa termina después del fin, no hay
   `restaurantResumed`.
+- **Si el hilo despierta tarde y ya llegó la orden de parar**, el límite que le faltaba (con `t` anterior al del fin) lo
+  escribe la propia orden de parar, antes de `simulationStopping` y en orden de tiempo. Lo que ya quedó registrado lo
+  llevan el hilo y la orden de parar en un `PauseLog`, que solo se toca con el lock de `Shutdown`. Sin esto, con la
+  máquina cargada, el log podía perder la última reanudación, aunque el restaurante sí la hubiera hecho.
 - **Locks:** mientras duerme, no tiene ninguno. Al escribir toma Shutdown → log, el orden que ya existía. No toma el
   lock del restaurante: no se agrega ninguna arista al orden de locks.
 - **Destino:**
@@ -158,6 +163,16 @@ cosas más:
 - que ningún `pickupStarted` cae dentro de una pausa;
 - que `pauses` del resumen es igual a las líneas `restaurantPaused`;
 - que `pickupsDelayedByPause`, recalculado desde el log, es igual al del resumen.
+
+**Lo que encontró la verificación con las pruebas en paralelo** (TSan, de 4 a 6 corridas a la vez) y se arregló en
+dos commits `fix:`:
+
+| Problema | Arreglo | Después |
+|---|---|---|
+| Una demora contada sin su `pickupStarted` en el log, cuando la detención niega el evento | se suma recién cuando el evento queda registrado | `pause_check`: 0 de 100 |
+| El calendario despertaba tarde y el log perdía la última reanudación | la orden de parar escribe los límites que faltaban | 0 de 100 |
+| Dos lecturas del reloj en `enter`: un retiro podía figurar dentro de una pausa | una sola lectura para decidir y para registrar | 0 de 100 |
+| Un data race de TSan al destruir la excepción de una estimación fallida, **ya presente en `main`** | la excepción viaja como `exception_ptr` dentro del resultado y se destruye en el hilo que la lee | `dispatch_check`: 0 de 40 |
 
 ## Limitaciones
 
