@@ -15,6 +15,30 @@
 // la configuración no trae el valor (decisión del proyecto).
 constexpr std::int64_t kHandoverMs = 30000;
 
+// El calendario de pausas de UN restaurante (variante B): en pausa en [k·P + offset, k·P + offset + D),
+// k = 0, 1, 2, ... (P = every, D = length, offset = i·P/R para el restaurante i de R). Es la ÚNICA
+// cuenta de las pausas: la usan el restaurante (para dar puestos) y el hilo del calendario (para los
+// eventos), así el log y el mecanismo no pueden contradecirse. Inmutable: se lee sin lock.
+// length = 0 (o sin calendario): no hay pausas, porque [s, s) no contiene ningún instante.
+struct PauseSchedule {
+    std::int64_t every = 1, length = 0, offset = 0;
+
+    // El del restaurante número `index` (en el orden del JSON) de `count`: escalonados, división entera.
+    static PauseSchedule forRestaurant(std::int64_t every, std::int64_t length, std::size_t index, std::size_t count)
+    {
+        return {every, length, static_cast<std::int64_t>(index) * every / static_cast<std::int64_t>(count)};
+    }
+    bool pausedAt(std::int64_t t) const { return length > 0 && t >= offset && (t - offset) % every < length; }
+    // Cuándo termina la pausa en curso en `t` (solo si pausedAt(t)).
+    std::int64_t pauseEnd(std::int64_t t) const { return t - (t - offset) % every + length; }
+    // Cuántas pausas empiezan en el intervalo abierto (from, to).
+    std::int64_t startsBetween(std::int64_t from, std::int64_t to) const
+    {
+        const auto startsUpTo = [this](std::int64_t t) { return t < offset ? 0 : (t - offset) / every + 1; };
+        return length == 0 || to <= from + 1 ? 0 : startsUpTo(to - 1) - startsUpTo(from);
+    }
+};
+
 // Un restaurante con `pickupSlots` puestos de recogida: un monitor (como 07/example_42).
 //
 // "En ningún instante puede haber más repartidores recogiendo comida allí que puestos
@@ -25,8 +49,11 @@ constexpr std::int64_t kHandoverMs = 30000;
 // toma un TICKET (número correlativo, con el lock tomado) y solo entra el ticket siguiente
 // en ser atendido, y solo si hay un puesto libre: como la fila con números de un banco.
 //
-// _inUse, _nextTicket, _nowServing y _aborted son privados y solo se tocan con _mutex
-// tomado: no hay data race posible sobre ellos.
+// Pausas (variante B): mientras el calendario dice que está en pausa, nadie toma un puesto; la fila
+// se conserva (los tickets no cambian) y se atiende en el mismo orden al terminar la pausa.
+//
+// _inUse, _nextTicket, _nowServing, _aborted y _delayedByPause son privados y solo se tocan con
+// _mutex tomado: no hay data race posible sobre ellos.
 class Restaurant {
 public:
     // Un puesto ocupado. Lo libera al destruirse (como lock_guard con un mutex): si la moto
@@ -71,14 +98,15 @@ public:
         std::int64_t _startedAtMs;
     };
 
-    Restaurant(std::string id, std::size_t pickupSlots);
+    Restaurant(std::string id, std::size_t pickupSlots, PauseSchedule pauses = PauseSchedule());
     Restaurant(const Restaurant&) = delete;
     Restaurant& operator=(const Restaurant&) = delete;
 
     const std::string& id() const { return _id; }
 
-    // Llega una moto: hace fila y bloquea SIN consumir CPU hasta que sea su turno y haya un
-    // puesto libre. Devuelve std::nullopt si se abortó (detención) antes o durante la espera.
+    // Llega una moto: hace fila y bloquea SIN consumir CPU hasta que sea su turno, haya un
+    // puesto libre y no esté en pausa. Devuelve std::nullopt si se abortó (detención) antes o
+    // durante la espera.
     // `clock` da la hora de llegada y la de entrada al puesto que lleva el Slot.
     std::optional<Slot> enter(const SimClock& clock);
 
@@ -88,11 +116,18 @@ public:
 
     std::size_t inUse() const;
 
+    // Veces que una moto que tomó un puesto ya estaba en la fila cuando empezó una pausa, o entró a la
+    // fila durante una pausa (pickupsDelayedByPause). Solo cuenta las que llegaron a tomar el puesto:
+    // es lo que se puede recalcular desde el log (pickupStarted trae arrivedAt y t).
+    std::int64_t delayedByPause() const;
+    const PauseSchedule& pauses() const { return _pauses; }
+
 private:
     void leave();
 
     const std::string _id;
     const std::size_t _slots;
+    const PauseSchedule _pauses;
 
     mutable std::mutex _mutex;
     std::condition_variable _turn;
@@ -100,6 +135,7 @@ private:
     std::uint64_t _nextTicket = 0;  // el que tomará la próxima moto que llegue
     std::uint64_t _nowServing = 0;  // el próximo ticket que puede entrar
     bool _aborted = false;
+    std::int64_t _delayedByPause = 0;
 };
 
 // Los restaurantes de la simulación por id. El mapa se arma antes de lanzar hilos y no cambia;
