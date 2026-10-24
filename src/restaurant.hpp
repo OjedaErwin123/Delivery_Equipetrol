@@ -52,8 +52,8 @@ struct PauseSchedule {
 // Pausas (variante B): mientras el calendario dice que está en pausa, nadie toma un puesto; la fila
 // se conserva (los tickets no cambian) y se atiende en el mismo orden al terminar la pausa.
 //
-// _inUse, _nextTicket, _nowServing, _aborted y _delayedByPause son privados y solo se tocan con
-// _mutex tomado: no hay data race posible sobre ellos.
+// _inUse, _nextTicket, _nowServing y _aborted son privados y solo se tocan con _mutex tomado: no
+// hay data race posible sobre ellos.
 class Restaurant {
 public:
     // Un puesto ocupado. Lo libera al destruirse (como lock_guard con un mutex): si la moto
@@ -63,7 +63,7 @@ public:
     public:
         Slot(Slot&& other) noexcept
             : _restaurant(other._restaurant), _ticket(other._ticket), _arrivedAtMs(other._arrivedAtMs),
-              _startedAtMs(other._startedAtMs)
+              _startedAtMs(other._startedAtMs), _delaysByPause(other._delaysByPause)
         {
             other._restaurant = nullptr;
         }
@@ -84,11 +84,17 @@ public:
         // horas es el de los tickets (ver enter()).
         std::int64_t arrivedAtMs() const { return _arrivedAtMs; }
         std::int64_t startedAtMs() const { return _startedAtMs; }
+        // Las demoras por pausa de esta visita (pickupsDelayedByPause): cada pausa que empezó mientras
+        // esperaba, y una más si llegó en plena pausa. Las suma la moto solo si su pickupStarted queda
+        // en el log: así el resumen es exactamente lo que se recalcula desde el log.
+        std::int64_t delaysByPause() const { return _delaysByPause; }
 
     private:
         friend class Restaurant;
-        Slot(Restaurant& restaurant, std::uint64_t ticket, std::int64_t arrivedAtMs, std::int64_t startedAtMs)
-            : _restaurant(&restaurant), _ticket(ticket), _arrivedAtMs(arrivedAtMs), _startedAtMs(startedAtMs)
+        Slot(Restaurant& restaurant, std::uint64_t ticket, std::int64_t arrivedAtMs, std::int64_t startedAtMs,
+             std::int64_t delaysByPause)
+            : _restaurant(&restaurant), _ticket(ticket), _arrivedAtMs(arrivedAtMs), _startedAtMs(startedAtMs),
+              _delaysByPause(delaysByPause)
         {
         }
 
@@ -96,6 +102,7 @@ public:
         std::uint64_t _ticket;
         std::int64_t _arrivedAtMs;
         std::int64_t _startedAtMs;
+        std::int64_t _delaysByPause;
     };
 
     Restaurant(std::string id, std::size_t pickupSlots, PauseSchedule pauses = PauseSchedule());
@@ -115,11 +122,6 @@ public:
     void abort();
 
     std::size_t inUse() const;
-
-    // Veces que una moto que tomó un puesto ya estaba en la fila cuando empezó una pausa, o entró a la
-    // fila durante una pausa (pickupsDelayedByPause). Solo cuenta las que llegaron a tomar el puesto:
-    // es lo que se puede recalcular desde el log (pickupStarted trae arrivedAt y t).
-    std::int64_t delayedByPause() const;
     const PauseSchedule& pauses() const { return _pauses; }
 
 private:
@@ -135,7 +137,6 @@ private:
     std::uint64_t _nextTicket = 0;  // el que tomará la próxima moto que llegue
     std::uint64_t _nowServing = 0;  // el próximo ticket que puede entrar
     bool _aborted = false;
-    std::int64_t _delayedByPause = 0;
 };
 
 // Los restaurantes de la simulación por id. El mapa se arma antes de lanzar hilos y no cambia;

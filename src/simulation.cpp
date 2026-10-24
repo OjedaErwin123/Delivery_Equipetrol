@@ -370,16 +370,70 @@ bool handOver(Courier& broken, const std::vector<std::shared_ptr<Courier>>& cour
     }
 }
 
+// Lo que ya quedó en el log del calendario de cocinas (variante B): el próximo límite de cada
+// restaurante y cuántas pausas se registraron. Lo tocan SOLO las acciones de Shutdown (el
+// unlessStopped del hilo del calendario y el request del hilo principal), con su lock tomado: no hay
+// data race posible.
+struct PauseLog {
+    struct Next {
+        std::int64_t t;
+        bool starts;  // true: el próximo límite empieza una pausa; false: la termina
+    };
+    std::vector<Next> next;  // uno por restaurante, en el orden de los calendarios
+    int pauses = 0;          // líneas restaurantPaused
+};
+
+// Registra el próximo límite del restaurante `r` y avanza al siguiente. Con el lock de Shutdown tomado.
+void logBoundary(EventLog& log, PauseLog& done, const std::vector<std::pair<std::string, PauseSchedule>>& schedules,
+                 std::size_t r)
+{
+    PauseLog::Next& n = done.next[r];
+    Event e;
+    e.t = n.t;
+    e.event = n.starts ? "restaurantPaused" : "restaurantResumed";
+    e.restaurant = schedules[r].first;
+    log.write(e);
+    const PauseSchedule& k = schedules[r].second;
+    if (n.starts) {
+        ++done.pauses;
+        n.t += k.length;
+    } else {
+        n.t += k.every - k.length;
+    }
+    n.starts = !n.starts;
+}
+
+// Escribe, antes de simulationStopping, los límites que ya ocurrieron (t < stopT) y el calendario no
+// alcanzó a registrar porque despertó tarde: van en orden de tiempo. Con el lock de Shutdown tomado
+// (desde la acción de request): así el log no pierde una reanudación que el restaurante sí hizo.
+void logMissedBoundaries(EventLog& log, PauseLog& done,
+                         const std::vector<std::pair<std::string, PauseSchedule>>& schedules, std::int64_t stopT)
+{
+    for (;;) {
+        std::size_t earliest = done.next.size();
+        for (std::size_t r = 0; r < done.next.size(); ++r) {
+            if (done.next[r].t < stopT && (earliest == done.next.size() || done.next[r].t < done.next[earliest].t)) {
+                earliest = r;
+            }
+        }
+        if (earliest == done.next.size()) {
+            return;
+        }
+        logBoundary(log, done, schedules, earliest);
+    }
+}
+
 // Hilo del calendario de cocinas (variante B): escribe restaurantPaused y restaurantResumed en los
 // límites EXACTOS del calendario de cada restaurante. Un solo hilo para todos: una cola de los
 // próximos límites ordenada por tiempo, duerme hasta el más próximo, lo registra y agrega el
 // siguiente de ese restaurante. El mecanismo no depende de él (el restaurante calcula su pausa con
 // el mismo PauseSchedule): este hilo solo escribe las líneas, con el t del calendario y no el de su
-// despertar. Con unlessStopped: ningún evento después de simulationStopping ni con t >= el fin.
-// Devuelve cuántos restaurantPaused registró. Termina con la orden de parar (siempre llega: por
-// tiempo, por señal, o la acción vacía del fin natural) o si ya no quedan límites antes del fin.
-int markPauses(const std::vector<std::pair<std::string, PauseSchedule>>& schedules, const SimClock& clock,
-               EventLog& log, const Shutdown& shutdown, std::int64_t endMs)
+// despertar. Con unlessStopped: ningún evento después de simulationStopping ni con t >= el fin; si
+// despierta tarde y ya se pidió parar, los límites que faltaban los escribe la orden de parar
+// (logMissedBoundaries). Termina con la orden de parar (siempre llega: por tiempo, por señal, o la
+// acción vacía del fin natural) o si ya no quedan límites antes del fin.
+void markPauses(const std::vector<std::pair<std::string, PauseSchedule>>& schedules, const SimClock& clock,
+                EventLog& log, const Shutdown& shutdown, std::int64_t endMs, PauseLog& done)
 {
     struct Boundary {
         std::int64_t t;
@@ -395,7 +449,6 @@ int markPauses(const std::vector<std::pair<std::string, PauseSchedule>>& schedul
             next.push({schedules[r].second.offset, r, true});
         }
     }
-    int pauses = 0;
     while (!next.empty()) {
         const Boundary b = next.top();
         next.pop();
@@ -405,22 +458,12 @@ int markPauses(const std::vector<std::pair<std::string, PauseSchedule>>& schedul
         if (shutdown.sleepUntil(clock.realTimeAt(b.t))) {
             break;  // se pidió parar: despierta enseguida, aunque falte mucho para el límite
         }
-        Event e;
-        e.t = b.t;
-        e.event = b.starts ? "restaurantPaused" : "restaurantResumed";
-        e.restaurant = schedules[b.restaurant].first;
-        if (!shutdown.unlessStopped(b.t, [&log, &e] { log.write(e); })) {
+        if (!shutdown.unlessStopped(b.t, [&] { logBoundary(log, done, schedules, b.restaurant); })) {
             break;
         }
         const PauseSchedule& s = schedules[b.restaurant].second;
-        if (b.starts) {
-            ++pauses;  // solo si la línea se escribió: pauses = líneas restaurantPaused
-            next.push({b.t + s.length, b.restaurant, false});
-        } else {
-            next.push({b.t - s.length + s.every, b.restaurant, true});
-        }
+        next.push({b.starts ? b.t + s.length : b.t - s.length + s.every, b.restaurant, !b.starts});
     }
-    return pauses;
 }
 
 }  // namespace
@@ -584,11 +627,17 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
 
     // Variante B: el hilo del calendario de cocinas, si hay pausas. No cuenta en `running`: no es
     // trabajo pendiente y no termina solo. Su destino: termina con la orden de parar y se une abajo.
-    int pauses = 0;  // solo lo escribe el calendario; se lee después del join
+    // Lo que el calendario ya registró: solo se toca con el lock de Shutdown (ver PauseLog).
+    PauseLog pauseLog;
+    for (const auto& schedule : pauseSchedules) {
+        pauseLog.next.push_back({schedule.second.length > 0 ? schedule.second.offset
+                                                            : std::numeric_limits<std::int64_t>::max(),
+                                 true});
+    }
     std::thread calendar;
     if (p.pauses && p.pauses->pauseMs > 0 && !pauseSchedules.empty()) {
-        calendar = std::thread([&pauseSchedules, &clock, &log, &shutdown, &pauses, endMs] {
-            pauses = markPauses(pauseSchedules, clock, log, shutdown, endMs);
+        calendar = std::thread([&pauseSchedules, &clock, &log, &shutdown, &pauseLog, endMs] {
+            markPauses(pauseSchedules, clock, log, shutdown, endMs, pauseLog);
         });
     }
 
@@ -652,6 +701,7 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
             if (p.durationS > 0) {
                 e.t = std::min(e.t, endMs);
             }
+            logMissedBoundaries(log, pauseLog, pauseSchedules, e.t);  // las pausas que ya ocurrieron, antes
             log.write(e);
         });
         book.abort();
@@ -693,16 +743,12 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         s.maxDeliveryMs = std::max(s.maxDeliveryMs, courier->maxDeliveryMs());
         s.breakdowns += courier->breakdowns();
         s.reassigned += courier->reassigned();
+        s.pickupsDelayedByPause += courier->delayedByPause();
         s.deliveredPerCourier.emplace_back(courier->id(), courier->delivered());
     }
     s.avgDeliveryMs = s.delivered > 0 ? total / s.delivered : 0;
     s.hasPauses = p.pauses.has_value();
-    s.pauses = pauses;
-    if (restaurants) {
-        for (const auto& restaurant : *restaurants) {
-            s.pickupsDelayedByPause += restaurant.second->delayedByPause();
-        }
-    }
+    s.pauses = pauseLog.pauses;  // después de los join (lo escribieron el calendario y este hilo, con el lock)
     return s;
 }
 

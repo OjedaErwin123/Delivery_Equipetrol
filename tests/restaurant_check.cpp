@@ -186,12 +186,14 @@ int main()
         Restaurant r("r5", 1, pause);
         std::mutex m;
         int inside = 0, maxInside = 0;
+        std::int64_t delays = 0;
         std::vector<std::pair<std::int64_t, std::int64_t>> times;  // (llegada, puesto), de las 5 motos
         const auto visit = [&](std::chrono::milliseconds hold) {
             std::optional<Restaurant::Slot> slot = r.enter(clock);
             {
                 std::lock_guard<std::mutex> lock(m);
                 times.emplace_back(slot->arrivedAtMs(), slot->startedAtMs());
+                delays += slot->delaysByPause();
                 maxInside = std::max(maxInside, ++inside);
             }
             std::this_thread::sleep_for(hold);  // representa la entrega en el puesto (no coordina)
@@ -222,11 +224,11 @@ int main()
         for (const auto& t : times) {
             std::cout << " " << t.first / 1000 << "/" << t.second / 1000;
         }
-        std::cout << "; demoras = " << r.delayedByPause() << "\n";
+        std::cout << "; demoras = " << delays << "\n";
         ok &= check("pausa: nadie toma un puesto dentro de la pausa", outside);
         ok &= check("pausa: los que esperaban entran después del fin, en orden de llegada", afterPause && fifo);
         ok &= check("pausa: pickupSlots se respeta (1 a la vez)", maxInside == 1);
-        ok &= check("pausa: 4 demoras (E ya estaba en la fila; B, C y D entraron en pausa)", r.delayedByPause() == 4);
+        ok &= check("pausa: 4 demoras (E ya estaba en la fila; B, C y D entraron en pausa)", delays == 4);
     }
 
     // 8. Detención en mitad de una pausa: las motos en la fila despiertan enseguida, sin puesto.

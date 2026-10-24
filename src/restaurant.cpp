@@ -17,13 +17,15 @@ std::optional<Restaurant::Slot> Restaurant::enter(const SimClock& clock)
     const std::int64_t arrivedAt = clock.nowMs();
     // Cada vuelta vuelve a evaluar la condición, así cubre los despertares espurios y a los que
     // despiertan sin ser su turno. Nadie gira comprobando: en cada vuelta duerme.
+    std::int64_t now = 0;
     for (;;) {
         if (_aborted) {
             return std::nullopt;
         }
-        // La pausa se pregunta con el lock tomado y con el mismo reloj que startedAt: ningún
-        // startedAt puede caer dentro de una pausa.
-        const std::int64_t now = clock.nowMs();
+        // La pausa se pregunta con el lock tomado, y con ESTA lectura del reloj se registra después
+        // startedAt: si se leyera el reloj de nuevo, entre las dos lecturas podría empezar una pausa
+        // y el log mostraría una entrada dentro de ella.
+        now = clock.nowMs();
         const bool paused = _pauses.pausedAt(now);
         if (!paused && ticket == _nowServing && _inUse < _slots) {
             break;
@@ -39,16 +41,16 @@ std::optional<Restaurant::Slot> Restaurant::enter(const SimClock& clock)
     }
     ++_nowServing;
     ++_inUse;
-    const std::int64_t startedAt = clock.nowMs();  // también con el lock: en orden de ticket
-    // Las demoras por pausa de esta visita, una sola vez y con tiempos simulados (sin doble conteo):
-    // cada pausa que empezó mientras esperaba, y una más si llegó en plena pausa.
-    _delayedByPause += _pauses.startsBetween(arrivedAt, startedAt) + (_pauses.pausedAt(arrivedAt) ? 1 : 0);
+    const std::int64_t startedAt = now;  // la misma lectura que decidió que no estaba en pausa (en orden de ticket)
+    // Las demoras por pausa de esta visita, con tiempos simulados: cada pausa que empezó mientras
+    // esperaba, y una más si llegó en plena pausa.
+    const std::int64_t delays = _pauses.startsBetween(arrivedAt, startedAt) + (_pauses.pausedAt(arrivedAt) ? 1 : 0);
     lock.unlock();
     // El ticket siguiente puede entrar ya si queda otro puesto libre (pickupSlots > 1).
     // notify_all y no notify_one: hay que despertar a UNA moto concreta (la del ticket
     // siguiente) y no se sabe cuál de las que duermen es; las demás vuelven a dormir.
     _turn.notify_all();
-    return Slot(*this, ticket, arrivedAt, startedAt);
+    return Slot(*this, ticket, arrivedAt, startedAt, delays);
 }
 
 void Restaurant::leave()
@@ -67,12 +69,6 @@ void Restaurant::abort()
         _aborted = true;
     }
     _turn.notify_all();
-}
-
-std::int64_t Restaurant::delayedByPause() const
-{
-    std::lock_guard<std::mutex> lock(_mutex);
-    return _delayedByPause;
 }
 
 std::size_t Restaurant::inUse() const

@@ -347,6 +347,11 @@ Courier::Leg Courier::pickUp(const std::string& restaurant)
                 if (!logEvent("pickupStarted", c.order, startedAt, true, arrivedAt)) {
                     return Leg::stopped;
                 }
+                if (here.empty() && slot) {
+                    // La visita ya está en el log: recién ahora cuentan sus demoras por pausa. Si la
+                    // detención negó el evento, no cuentan (el log no las muestra).
+                    _delayedByPause += slot->delaysByPause();
+                }
                 here.push_back(c.order.id());
                 readyAt = std::max(readyAt, c.order.readyAtMs());
             }
