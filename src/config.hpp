@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -27,6 +28,12 @@ struct RestaurantConfig {
     std::int64_t prepMinMs = 0, prepMaxMs = 0;
 };
 
+// Pausas de la ventanilla de entrega (variante B): cada pauseEveryMs, cada restaurante deja de dar
+// puestos durante pauseMs (simulados), escalonado por restaurante. pauseMs = 0: no hay pausas.
+struct KitchenConfig {
+    std::int64_t pauseEveryMs = 0, pauseMs = 0;
+};
+
 struct Config {
     // map
     std::string mapImage;  // ruta resuelta: relativa a la carpeta del archivo de configuración
@@ -50,6 +57,9 @@ struct Config {
 
     // incidents
     double breakdownProbability = 0;
+
+    // kitchen (opcional): sin el bloque no hay pausas
+    std::optional<KitchenConfig> kitchen;
 
     // simulation: durationS = 0 significa "hasta recibir una señal"
     std::int64_t durationS = 0;

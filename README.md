@@ -36,6 +36,8 @@ mkdir build-tsan && cd build-tsan && cmake -DENABLE_TSAN=ON .. && make
 - Una configuración inválida o un mal uso salen con un mensaje en stderr, sin simular: código 1 para configuración o
   log inválidos, 2 para argumentos mal usados.
 - `ctest` corre las pruebas de cada pieza (`tests/`).
+- Con las pausas de cocina (variante B): `./delivery_sim ../config/equipetrol_pausas.json`; el log se verifica con
+  `python3 ../tools/verificar_orden_llegada.py events.log salida.txt`, donde `salida.txt` es la salida estándar.
 
 ## Dónde está cada criterio de la rúbrica
 
@@ -415,6 +417,14 @@ Con ventana, la salida incluye los 2 s en que la ventana muestra el resumen ante
    No se usa un archivo de supresiones de Valgrind: la salida cruda muestra estos 4 tal cual.
 
    **Sin ventana, el programa tiene 0 errores y 0 bytes perdidos**: nuestro código está limpio.
+
+## Variante B: pausas de cocina
+
+Los restaurantes pueden cerrar la ventanilla de entrega cada cierto tiempo. Se activa con el bloque opcional
+`"kitchen": {"pauseEveryMs": P, "pauseMs": D}`; sin él, todo funciona y sale exactamente igual que antes. Agrega los
+eventos `restaurantPaused` y `restaurantResumed`, y los campos `pauses` y `pickupsDelayedByPause` del resumen. El
+escenario de prueba es `config/equipetrol_pausas.json`. El diseño, las decisiones y la evidencia están en
+[`docs/pausas_de_cocina/README.md`](docs/pausas_de_cocina/README.md).
 
 ## Uso de inteligencia artificial
 

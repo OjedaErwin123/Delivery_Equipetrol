@@ -70,6 +70,8 @@ struct SimParams {
     double timeScale = 60.0;              // segundos simulados por segundo real
     std::uint32_t seed = 42;
     std::int64_t durationS = 0;           // fin por tiempo simulado; 0 = hasta una señal (o hasta `orders`)
+    // Variante B: el bloque kitchen (pausas de la ventanilla). Sin valor, sin pausas.
+    std::optional<KitchenConfig> pauses;
 };
 
 // Los parámetros que salen del archivo de configuración (ya validado): motos, semilla,
@@ -93,6 +95,10 @@ struct Summary {
     std::int64_t avgDeliveryMs = 0;  // de la creación a la entrega
     std::int64_t maxDeliveryMs = 0;
     std::vector<std::pair<std::string, int>> deliveredPerCourier;
+    // Variante B. hasPauses: la configuración trae el bloque kitchen.
+    bool hasPauses = false;
+    int pauses = 0;                         // líneas restaurantPaused
+    std::int64_t pickupsDelayedByPause = 0;
 };
 
 // Una foto de la simulación en un frame, para dibujarla: cada moto (viaje y estado), los contadores
@@ -118,5 +124,6 @@ Summary runSimulation(const SimParams& params, std::ostream& logOut, std::ostrea
 // Sin señal: solo termina por tiempo o al entregar todos los pedidos (lo usan las pruebas).
 Summary runSimulation(const SimParams& params, std::ostream& logOut, std::ostream& out);
 
-// El resumen como una línea JSON, con el formato del enunciado.
+// El resumen como una línea JSON, con el formato del enunciado. Con pausas de cocina (variante B),
+// además "pauses" y "pickupsDelayedByPause" al final.
 std::string toJson(const Summary& summary);

@@ -1,6 +1,6 @@
 // Prueba de la lectura de la configuración: el archivo real se lee completo, y cada
 // configuración rota (archivo inexistente, JSON mal formado, propiedad ausente, tipo
-// equivocado) se rechaza con un ConfigError que nombra la propiedad. Sale con 0 si todo
+// equivocado, bloque kitchen fuera de rango) se rechaza con un ConfigError que nombra la propiedad. Sale con 0 si todo
 // está bien. Uso: config_check <ruta a config/equipetrol.json>
 #include <fstream>
 #include <functional>
@@ -120,6 +120,25 @@ int main(int argc, char** argv)
     ok &= rejects("duración negativa", [](json& j) { j["simulation"]["durationS"] = -1; }, "simulation.durationS");
     ok &= rejects("timeScale 0", [](json& j) { j["simulation"]["timeScale"] = 0; }, "simulation.timeScale: debe ser mayor que 0");
     ok &= rejects("bounds invertidos", [](json& j) { j["map"]["bounds"]["north"] = -1.0; }, "map.bounds: debe cumplir north > south");
+
+    // El bloque kitchen (opcional): enteros, pauseEveryMs > 0 y 0 <= pauseMs < pauseEveryMs.
+    const auto kitchen = [](std::int64_t every, std::int64_t pause) {
+        return [every, pause](json& j) { j["kitchen"] = {{"pauseEveryMs", every}, {"pauseMs", pause}}; };
+    };
+    ok &= rejects("kitchen: pauseEveryMs 0", kitchen(0, 0), "kitchen.pauseEveryMs: debe ser mayor que 0");
+    ok &= rejects("kitchen: pauseMs = pauseEveryMs", kitchen(1000, 1000), "kitchen.pauseMs: debe cumplir");
+    ok &= rejects("kitchen: pauseMs negativo", kitchen(1000, -1), "kitchen.pauseMs: debe cumplir");
+    ok &= rejects("kitchen: no entero", [](json& j) { j["kitchen"] = {{"pauseEveryMs", 1000.5}, {"pauseMs", 10}}; },
+                  "kitchen.pauseEveryMs: debe ser un número entero");
+    ok &= rejects("kitchen: falta pauseMs", [](json& j) { j["kitchen"] = {{"pauseEveryMs", 1000}}; },
+                  "falta la propiedad obligatoria kitchen.pauseMs");
+    ok &= rejects("kitchen: no es un objeto", [](json& j) { j["kitchen"] = 5; }, "kitchen: debe ser un objeto");
+    json withKitchen = minimal();
+    withKitchen["kitchen"] = {{"pauseEveryMs", 900000}, {"pauseMs", 0}};
+    const Config k = parseConfig(withKitchen.dump(), "config");
+    ok &= check("kitchen: sin el bloque no hay pausas; con él (pauseMs 0 vale) se lee",
+                !parseConfig(minimal().dump(), "config").kitchen && k.kitchen && k.kitchen->pauseEveryMs == 900000 &&
+                    k.kitchen->pauseMs == 0);
 
     // Los bordes válidos se aceptan: probabilidad 0 y 1, maxPending 0, durationS 0 (hasta una señal).
     json edges = minimal();

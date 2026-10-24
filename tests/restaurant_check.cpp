@@ -1,5 +1,7 @@
 // Prueba del restaurante: nunca más motos recogiendo que puestos, atención en orden de
-// llegada, abort despierta a los que hacen fila y el puesto se libera solo. Sale con 0 si todo está bien.
+// llegada, abort despierta a los que hacen fila y el puesto se libera solo. Con pausas de cocina:
+// nadie toma un puesto durante una pausa, la fila se atiende al terminar en el mismo orden, y las
+// demoras se cuentan bien. Sale con 0 si todo está bien.
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -158,6 +160,98 @@ int main()
         }
         ok &= check("horas: nadie toma el puesto antes de llegar", waited);
         ok &= check("horas: quien llegó antes no toma el puesto después (FIFO visible en el log)", fifo);
+    }
+
+    // 6. El calendario de pausas: escalonado con división entera, y las cuentas en los bordes.
+    {
+        const PauseSchedule r1 = PauseSchedule::forRestaurant(900000, 240000, 1, 7);
+        ok &= check("calendario: el restaurante 1 de 7 empieza en 900000/7 = 128571", r1.offset == 128571);
+        ok &= check("calendario: [inicio, fin) cerrado a la izquierda, abierto a la derecha",
+                    !r1.pausedAt(128570) && r1.pausedAt(128571) && r1.pausedAt(368570) && !r1.pausedAt(368571) &&
+                        r1.pausedAt(900000 + 128571) && r1.pauseEnd(200000) == 368571);
+        ok &= check("calendario: pausas que empiezan en (desde, hasta)",
+                    r1.startsBetween(0, 128571) == 0 && r1.startsBetween(0, 128572) == 1 &&
+                        r1.startsBetween(128571, 2000000) == 2 && r1.startsBetween(100000, 1100000) == 2);
+        const PauseSchedule none = PauseSchedule::forRestaurant(900000, 0, 0, 7);
+        ok &= check("calendario: pauseMs 0 no tiene pausas", !none.pausedAt(0) && none.startsBetween(0, 5000000) == 0);
+    }
+
+    // 7. Una pausa con fila: 1 puesto, pausa en [100 s, 1100 s) simulados (100 ms a 1,1 s reales).
+    //    A toma el puesto antes de la pausa y lo tiene 300 ms; E llega mientras A lo tiene (ya está en
+    //    la fila cuando empieza la pausa); B, C y D llegan durante la pausa. Nadie toma el puesto dentro
+    //    de la pausa; E, B, C y D entran después, en orden de llegada, de a uno; y hay 4 demoras.
+    {
+        const SimClock clock(1000.0);  // propio: t = 0 al empezar este caso (los anteriores ya consumieron tiempo)
+        const PauseSchedule pause{10000000, 1000000, 100000};
+        Restaurant r("r5", 1, pause);
+        std::mutex m;
+        int inside = 0, maxInside = 0;
+        std::vector<std::pair<std::int64_t, std::int64_t>> times;  // (llegada, puesto), de las 5 motos
+        const auto visit = [&](std::chrono::milliseconds hold) {
+            std::optional<Restaurant::Slot> slot = r.enter(clock);
+            {
+                std::lock_guard<std::mutex> lock(m);
+                times.emplace_back(slot->arrivedAtMs(), slot->startedAtMs());
+                maxInside = std::max(maxInside, ++inside);
+            }
+            std::this_thread::sleep_for(hold);  // representa la entrega en el puesto (no coordina)
+            std::lock_guard<std::mutex> lock(m);
+            --inside;
+        };
+        // Los sleep_for de abajo representan "llega en tal momento" (no coordinan hilos).
+        std::vector<std::thread> couriers;
+        couriers.emplace_back(visit, std::chrono::milliseconds(300));  // A
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        couriers.emplace_back(visit, std::chrono::milliseconds(50));  // E
+        std::this_thread::sleep_for(std::chrono::milliseconds(380));
+        for (int i = 0; i < 3; ++i) {  // B, C, D
+            couriers.emplace_back(visit, std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        }
+        for (std::thread& t : couriers) {
+            t.join();
+        }
+        std::sort(times.begin(), times.end());  // por llegada
+        bool outside = times.size() == 5, fifo = true, afterPause = true;
+        for (std::size_t i = 0; i < times.size(); ++i) {
+            outside = outside && !pause.pausedAt(times[i].second);
+            fifo = fifo && (i == 0 || times[i - 1].second <= times[i].second);
+            afterPause = afterPause && (i == 0 || times[i].second >= 1100000);
+        }
+        std::cout << "pausa: llegadas/puestos (s simulados):";
+        for (const auto& t : times) {
+            std::cout << " " << t.first / 1000 << "/" << t.second / 1000;
+        }
+        std::cout << "; demoras = " << r.delayedByPause() << "\n";
+        ok &= check("pausa: nadie toma un puesto dentro de la pausa", outside);
+        ok &= check("pausa: los que esperaban entran después del fin, en orden de llegada", afterPause && fifo);
+        ok &= check("pausa: pickupSlots se respeta (1 a la vez)", maxInside == 1);
+        ok &= check("pausa: 4 demoras (E ya estaba en la fila; B, C y D entraron en pausa)", r.delayedByPause() == 4);
+    }
+
+    // 8. Detención en mitad de una pausa: las motos en la fila despiertan enseguida, sin puesto.
+    {
+        Restaurant r("r6", 1, PauseSchedule{100000000, 99000000, 0});  // en pausa desde t = 0, por ~27 h simuladas
+        std::mutex m;
+        int refused = 0;
+        std::vector<std::thread> couriers;
+        for (int i = 0; i < 3; ++i) {
+            couriers.emplace_back([&] {
+                const bool got = r.enter(clock).has_value();
+                std::lock_guard<std::mutex> lock(m);
+                refused += got ? 0 : 1;
+            });
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));  // representa "en algún momento"
+        const auto stopAt = std::chrono::steady_clock::now();
+        r.abort();
+        for (std::thread& t : couriers) {
+            t.join();  // si la espera con plazo no despertara con abort, esto tardaría horas
+        }
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - stopAt);
+        std::cout << "pausa + abort: " << refused << " sin puesto, en " << ms.count() << " ms\n";
+        ok &= check("pausa + abort: las motos en la fila despiertan enseguida, sin puesto",
+                    refused == 3 && ms.count() < 1000);
     }
 
     return ok ? 0 : 1;
