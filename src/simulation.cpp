@@ -720,5 +720,12 @@ std::string toJson(const Summary& s)
         json += (i > 0 ? ", \"" : "\"") + s.deliveredPerCourier[i].first + "\": " +
                 std::to_string(s.deliveredPerCourier[i].second);
     }
-    return json + "}}";
+    json += "}";
+    if (s.hasPauses) {
+        // Variante B: solo si la configuración trae kitchen. Sin el bloque, el resumen queda
+        // exactamente como en la sección 6.3 del brief.
+        json += ", \"pauses\": " + std::to_string(s.pauses) +
+                ", \"pickupsDelayedByPause\": " + std::to_string(s.pickupsDelayedByPause);
+    }
+    return json + "}";
 }

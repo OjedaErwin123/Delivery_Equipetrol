@@ -124,5 +124,6 @@ Summary runSimulation(const SimParams& params, std::ostream& logOut, std::ostrea
 // Sin señal: solo termina por tiempo o al entregar todos los pedidos (lo usan las pruebas).
 Summary runSimulation(const SimParams& params, std::ostream& logOut, std::ostream& out);
 
-// El resumen como una línea JSON, con el formato del enunciado.
+// El resumen como una línea JSON, con el formato del enunciado. Con pausas de cocina (variante B),
+// además "pauses" y "pickupsDelayedByPause" al final.
 std::string toJson(const Summary& summary);

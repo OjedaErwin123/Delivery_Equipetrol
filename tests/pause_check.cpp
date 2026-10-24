@@ -126,6 +126,24 @@ int main()
         ok &= check("por tiempo: pauses del resumen = líneas restaurantPaused", s.hasPauses && s.pauses == paused);
         ok &= check("por tiempo: pickupsDelayedByPause del resumen = recalculado desde el log",
                     delayed > 0 && s.pickupsDelayedByPause == delayed);
+        const std::string json = toJson(s);
+        std::cout << "resumen: " << json << "\n";
+        ok &= check("por tiempo: el resumen termina con pauses y pickupsDelayedByPause",
+                    json.find(", \"pauses\": " + std::to_string(paused) + ", \"pickupsDelayedByPause\": " +
+                              std::to_string(delayed) + "}") != std::string::npos);
+    }
+
+    // 1b. Sin el bloque kitchen, el resumen no cambia: ni pauses ni pickupsDelayedByPause.
+    {
+        Config c = town(60, 60000, 20000);
+        c.kitchen.reset();
+        std::ostringstream logOut, out;
+        const Summary s = runSimulation(paramsFromConfig(c), logOut, out, never);
+        const std::string json = toJson(s);
+        ok &= check("sin kitchen: el resumen queda como en el brief (sin campos nuevos ni eventos de pausa)",
+                    !s.hasPauses && json.find("pauses") == std::string::npos &&
+                        json.find("PickupsDelayed") == std::string::npos && json.back() == '}' &&
+                        logOut.str().find("restaurantPaused") == std::string::npos);
     }
 
     // 2. Fin natural (tope de pedidos, sin duración): termina aunque el calendario esté dormido
