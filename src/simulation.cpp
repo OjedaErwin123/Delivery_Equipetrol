@@ -9,10 +9,12 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <queue>
 #include <random>
 #include <set>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
 
 #include "courier.hpp"
 #include "estimate.hpp"
@@ -368,6 +370,59 @@ bool handOver(Courier& broken, const std::vector<std::shared_ptr<Courier>>& cour
     }
 }
 
+// Hilo del calendario de cocinas (variante B): escribe restaurantPaused y restaurantResumed en los
+// límites EXACTOS del calendario de cada restaurante. Un solo hilo para todos: una cola de los
+// próximos límites ordenada por tiempo, duerme hasta el más próximo, lo registra y agrega el
+// siguiente de ese restaurante. El mecanismo no depende de él (el restaurante calcula su pausa con
+// el mismo PauseSchedule): este hilo solo escribe las líneas, con el t del calendario y no el de su
+// despertar. Con unlessStopped: ningún evento después de simulationStopping ni con t >= el fin.
+// Devuelve cuántos restaurantPaused registró. Termina con la orden de parar (siempre llega: por
+// tiempo, por señal, o la acción vacía del fin natural) o si ya no quedan límites antes del fin.
+int markPauses(const std::vector<std::pair<std::string, PauseSchedule>>& schedules, const SimClock& clock,
+               EventLog& log, const Shutdown& shutdown, std::int64_t endMs)
+{
+    struct Boundary {
+        std::int64_t t;
+        std::size_t restaurant;
+        bool starts;  // true: empieza una pausa; false: termina
+    };
+    const auto later = [](const Boundary& a, const Boundary& b) {
+        return std::tie(a.t, a.restaurant) > std::tie(b.t, b.restaurant);  // el menor t primero; empate: índice
+    };
+    std::priority_queue<Boundary, std::vector<Boundary>, decltype(later)> next(later);
+    for (std::size_t r = 0; r < schedules.size(); ++r) {
+        if (schedules[r].second.length > 0) {
+            next.push({schedules[r].second.offset, r, true});
+        }
+    }
+    int pauses = 0;
+    while (!next.empty()) {
+        const Boundary b = next.top();
+        next.pop();
+        if (endMs > 0 && b.t >= endMs) {
+            break;  // los demás son todavía más tarde: ya no hay límites dentro de la simulación
+        }
+        if (shutdown.sleepUntil(clock.realTimeAt(b.t))) {
+            break;  // se pidió parar: despierta enseguida, aunque falte mucho para el límite
+        }
+        Event e;
+        e.t = b.t;
+        e.event = b.starts ? "restaurantPaused" : "restaurantResumed";
+        e.restaurant = schedules[b.restaurant].first;
+        if (!shutdown.unlessStopped(b.t, [&log, &e] { log.write(e); })) {
+            break;
+        }
+        const PauseSchedule& s = schedules[b.restaurant].second;
+        if (b.starts) {
+            ++pauses;  // solo si la línea se escribió: pauses = líneas restaurantPaused
+            next.push({b.t + s.length, b.restaurant, false});
+        } else {
+            next.push({b.t - s.length + s.every, b.restaurant, true});
+        }
+    }
+    return pauses;
+}
+
 }  // namespace
 
 SimParams paramsFromConfig(const Config& c)
@@ -386,6 +441,7 @@ SimParams paramsFromConfig(const Config& c)
     p.seed = static_cast<std::uint32_t>(c.seed);
     p.breakdownProbability = c.breakdownProbability;
     p.durationS = c.durationS;
+    p.pauses = c.kitchen;
 
     // Destino (decisión "C"): un nodo de la red que no sea de un restaurante. El formato no
     // tiene casas, así que el punto de entrega lo elige la simulación entre esos nodos.
@@ -454,10 +510,19 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
     // mientras alguno la use.
     // Los restaurantes con sus puestos (monitores que comparten las motos que llegan).
     std::shared_ptr<const Restaurants> restaurants;
+    // El calendario de pausas de cada restaurante, en el orden del JSON (variante B). El mismo valor va
+    // al restaurante (el mecanismo) y al hilo del calendario (los eventos). Se arma antes de lanzar los
+    // hilos y después solo se lee.
+    std::vector<std::pair<std::string, PauseSchedule>> pauseSchedules;
     if (!p.kitchens.empty()) {
         auto all = std::make_shared<Restaurants>();
         for (std::size_t r = 0; r < p.restaurants.size(); ++r) {
-            all->emplace(p.restaurants[r], std::make_shared<Restaurant>(p.restaurants[r], p.kitchens[r].pickupSlots));
+            const PauseSchedule pauses =
+                p.pauses ? PauseSchedule::forRestaurant(p.pauses->pauseEveryMs, p.pauses->pauseMs, r, p.restaurants.size())
+                         : PauseSchedule();
+            pauseSchedules.emplace_back(p.restaurants[r], pauses);
+            all->emplace(p.restaurants[r],
+                         std::make_shared<Restaurant>(p.restaurants[r], p.kitchens[r].pickupSlots, pauses));
         }
         restaurants = std::move(all);
     }
@@ -516,6 +581,16 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         generated = generateOrders(p, clock, log, book, shutdown);
         running.fetch_sub(1);
     });
+
+    // Variante B: el hilo del calendario de cocinas, si hay pausas. No cuenta en `running`: no es
+    // trabajo pendiente y no termina solo. Su destino: termina con la orden de parar y se une abajo.
+    int pauses = 0;  // solo lo escribe el calendario; se lee después del join
+    std::thread calendar;
+    if (p.pauses && p.pauses->pauseMs > 0 && !pauseSchedules.empty()) {
+        calendar = std::thread([&pauseSchedules, &clock, &log, &shutdown, &pauses, endMs] {
+            pauses = markPauses(pauseSchedules, clock, log, shutdown, endMs);
+        });
+    }
 
     // Bucle de frames (~30 por segundo): no es espera activa, el hilo duerme entre frames y
     // casi no usa CPU. El enunciado permite pausar para regular los FPS de la ventana: aquí
@@ -589,12 +664,20 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
                 restaurant.second->abort();  // despierta a las motos que hacen fila
             }
         }
+    } else {
+        // Fin natural (running llegó a 0: solo con tope de pedidos). Los demás hilos ya terminaron;
+        // la orden de parar, SIN evento (acción vacía), despierta al calendario, que duerme en
+        // sleepUntil hasta su próximo límite: si no, su join se colgaría.
+        shutdown.request([](std::int64_t) {});
     }
 
     generator.join();
     dispatcher.join();
     for (std::thread& t : courierThreads) {
         t.join();
+    }
+    if (calendar.joinable()) {
+        calendar.join();
     }
 
     // Después de los join: cada moto contó sus entregas sola; aquí se suman una vez.
@@ -613,6 +696,13 @@ Summary runSimulation(const SimParams& p, std::ostream& logOut, std::ostream& ou
         s.deliveredPerCourier.emplace_back(courier->id(), courier->delivered());
     }
     s.avgDeliveryMs = s.delivered > 0 ? total / s.delivered : 0;
+    s.hasPauses = p.pauses.has_value();
+    s.pauses = pauses;
+    if (restaurants) {
+        for (const auto& restaurant : *restaurants) {
+            s.pickupsDelayedByPause += restaurant.second->delayedByPause();
+        }
+    }
     return s;
 }
 
