@@ -250,7 +250,7 @@ int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log,
                 nearest(fleet.withSpace(), limit, *p.world, couriers, order->restaurant());
             const PlannedOrder planned{order->restaurant(), order->destination(), now + order->prepMs(), false};
             const auto roundStart = std::chrono::steady_clock::now();
-            std::vector<std::future<std::int64_t>> etas;
+            std::vector<std::future<ThreadPool::Outcome<std::int64_t>>> etas;
             for (std::size_t i : candidates) {
                 // Todo por valor: la tarea puede terminar tarde, cuando el despachador ya siguió.
                 etas.push_back(pool.submit([world = p.world, plan = couriers[i]->plan(), planned, now] {
@@ -264,7 +264,7 @@ int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log,
                     continue;  // tardía: se ignora (termina en el pool y nadie la lee)
                 }
                 try {
-                    ranked.emplace_back(etas[k].get(), candidates[k]);
+                    ranked.emplace_back(etas[k].get().take(), candidates[k]);  // take() relanza aquí
                 } catch (const std::exception& error) {  // el error cruzó de hilo por el future
                     std::cerr << "delivery_sim: estimación fallida (pedido " << order->id() << ", moto "
                               << couriers[candidates[k]]->id() << "): " << error.what() << "\n";
