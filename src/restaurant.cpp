@@ -2,7 +2,10 @@
 
 #include <utility>
 
-Restaurant::Restaurant(std::string id, std::size_t pickupSlots) : _id(std::move(id)), _slots(pickupSlots) {}
+Restaurant::Restaurant(std::string id, std::size_t pickupSlots, PauseSchedule pauses)
+    : _id(std::move(id)), _slots(pickupSlots), _pauses(pauses)
+{
+}
 
 std::optional<Restaurant::Slot> Restaurant::enter(const SimClock& clock)
 {
@@ -12,21 +15,42 @@ std::optional<Restaurant::Slot> Restaurant::enter(const SimClock& clock)
     // 100, la B 101 y ganarle B el lock: el log diría que A llegó antes y fue atendida después,
     // aunque los tickets se respetaron. Hora y ticket tienen que salir juntos (una foto consistente).
     const std::int64_t arrivedAt = clock.nowMs();
-    // El predicado cubre los despertares espurios y a los que despiertan sin ser su turno:
-    // vuelven a dormir. Nadie gira comprobando: wait suelta el lock y duerme.
-    _turn.wait(lock, [this, ticket] { return _aborted || (ticket == _nowServing && _inUse < _slots); });
-    if (_aborted) {
-        return std::nullopt;
+    // Cada vuelta vuelve a evaluar la condición, así cubre los despertares espurios y a los que
+    // despiertan sin ser su turno. Nadie gira comprobando: en cada vuelta duerme.
+    std::int64_t now = 0;
+    for (;;) {
+        if (_aborted) {
+            return std::nullopt;
+        }
+        // La pausa se pregunta con el lock tomado, y con ESTA lectura del reloj se registra después
+        // startedAt: si se leyera el reloj de nuevo, entre las dos lecturas podría empezar una pausa
+        // y el log mostraría una entrada dentro de ella.
+        now = clock.nowMs();
+        const bool paused = _pauses.pausedAt(now);
+        if (!paused && ticket == _nowServing && _inUse < _slots) {
+            break;
+        }
+        if (paused) {
+            // El fin de la pausa no lo avisa nadie (lo trae el paso del tiempo): espera CON plazo.
+            // +1 ms simulado porque nowMs() trunca: al despertar justo en el fin podría dar fin - 1,
+            // seguir "en pausa" y volver enseguida con el plazo ya vencido.
+            _turn.wait_until(lock, clock.realTimeAt(_pauses.pauseEnd(now) + 1));
+        } else {
+            _turn.wait(lock);  // lo cambia otra moto: la despierta leave() o la que entra
+        }
     }
     ++_nowServing;
     ++_inUse;
-    const std::int64_t startedAt = clock.nowMs();  // también con el lock: en orden de ticket
+    const std::int64_t startedAt = now;  // la misma lectura que decidió que no estaba en pausa (en orden de ticket)
+    // Las demoras por pausa de esta visita, con tiempos simulados: cada pausa que empezó mientras
+    // esperaba, y una más si llegó en plena pausa.
+    const std::int64_t delays = _pauses.startsBetween(arrivedAt, startedAt) + (_pauses.pausedAt(arrivedAt) ? 1 : 0);
     lock.unlock();
     // El ticket siguiente puede entrar ya si queda otro puesto libre (pickupSlots > 1).
     // notify_all y no notify_one: hay que despertar a UNA moto concreta (la del ticket
     // siguiente) y no se sabe cuál de las que duermen es; las demás vuelven a dormir.
     _turn.notify_all();
-    return Slot(*this, ticket, arrivedAt, startedAt);
+    return Slot(*this, ticket, arrivedAt, startedAt, delays);
 }
 
 void Restaurant::leave()

@@ -129,6 +129,7 @@ public:
     std::int64_t maxDeliveryMs() const { return _maxDeliveryMs; }
     int breakdowns() const { return _breakdowns; }
     int reassigned() const { return _reassigned; }  // pedidos que esta moto traspasó
+    std::int64_t delayedByPause() const { return _delayedByPause; }  // pickupsDelayedByPause de sus visitas
 
 private:
     // Registra el evento salvo que se haya pedido parar o `t` ya pase el fin; false si no lo registró.
@@ -210,6 +211,7 @@ private:
     const double _breakdownProbability;
     std::mt19937 _rng;  // propio de esta moto: solo lo usa su hilo (como el del generador de pedidos)
     int _breakdowns = 0;
+    std::int64_t _delayedByPause = 0;  // lo escribe solo el hilo de la moto; se lee después del join
     int _reassigned = 0;  // lo escribe solo el hilo que traspasa la mochila de esta moto
     std::function<bool(Courier&)> _handOver;  // se fija antes de lanzar el hilo; después solo se lee
 };

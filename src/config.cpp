@@ -141,6 +141,11 @@ void validate(const Config& c)
             "incidents.breakdownProbability: debe estar entre 0 y 1");
     require(c.durationS >= 0, atLeast("simulation.durationS", 0, c.durationS));
     require(c.timeScale > 0, "simulation.timeScale: debe ser mayor que 0");
+    if (c.kitchen) {
+        require(c.kitchen->pauseEveryMs > 0, "kitchen.pauseEveryMs: debe ser mayor que 0");
+        require(c.kitchen->pauseMs >= 0 && c.kitchen->pauseMs < c.kitchen->pauseEveryMs,
+                "kitchen.pauseMs: debe cumplir 0 <= pauseMs < pauseEveryMs");
+    }
 }
 
 }  // namespace
@@ -210,6 +215,13 @@ Config parseConfig(const std::string& textIn, const std::string& baseDir)
 
     const json& incidents = *property(j, "incidents", "incidents");
     c.breakdownProbability = number(incidents, "breakdownProbability", "incidents.breakdownProbability");
+
+    // Opcional: si el bloque está, sus dos propiedades son obligatorias y enteras.
+    if (j.contains("kitchen")) {
+        const json& kitchen = *property(j, "kitchen", "kitchen");
+        c.kitchen = KitchenConfig{integer(kitchen, "pauseEveryMs", "kitchen.pauseEveryMs"),
+                                  integer(kitchen, "pauseMs", "kitchen.pauseMs")};
+    }
 
     const json& simulation = *property(j, "simulation", "simulation");
     c.durationS = integer(simulation, "durationS", "simulation.durationS");
