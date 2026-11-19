@@ -38,6 +38,14 @@ int main(int argc, char** argv)
                 onlyConfig.configPath == "config/equipetrol.json" && onlyConfig.logPath == "events.log");
     const CliArgs withLog = parseArgs({"config/equipetrol.json", "--log", "run1.log"});
     ok &= check("con --log run1.log", withLog.configPath == "config/equipetrol.json" && withLog.logPath == "run1.log");
+    ok &= check("sin banderas de EC2: con ventana y simulando",
+                !onlyConfig.headless && !onlyConfig.bench() && onlyConfig.benchPath.empty());
+    const CliArgs bench = parseArgs({"c.json", "--headless", "--bench", "r.csv"});
+    ok &= check("--headless --bench r.csv", bench.headless && bench.bench() && bench.benchPath == "r.csv" &&
+                                                 !bench.benchOnce && bench.logPath == "events.log");
+    const CliArgs once = parseArgs({"c.json", "--bench-once", "--log", "x.log", "--headless"});
+    ok &= check("--bench-once sin --bench: mide sin CSV; las banderas en cualquier orden",
+                once.bench() && once.benchOnce && once.benchPath.empty() && once.headless && once.logPath == "x.log");
 
     // 2. Argumentos inválidos: el enunciado solo define la configuración y --log.
     ok &= check("sin argumentos", rejects({}, "falta el archivo de configuración"));
@@ -47,6 +55,9 @@ int main(int argc, char** argv)
     ok &= check("--log seguido de otra bandera", rejects({"c.json", "--log", "--x"}, "--log necesita"));
     ok &= check("--log dos veces", rejects({"c.json", "--log", "a.log", "--log", "b.log"}, "más de una vez"));
     ok &= check("argumento de más", rejects({"c.json", "otro.json"}, "argumento desconocido 'otro.json'"));
+    ok &= check("--bench sin ruta", rejects({"c.json", "--bench"}, "--bench necesita"));
+    ok &= check("--headless dos veces", rejects({"c.json", "--headless", "--headless"}, "más de una vez"));
+    ok &= check("--bench-once con valor de más", rejects({"c.json", "--bench-once", "x"}, "argumento desconocido 'x'"));
 
     // 3. Los parámetros que salen de la configuración real.
     if (argc < 2) {

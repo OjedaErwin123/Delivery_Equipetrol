@@ -1,4 +1,7 @@
-// delivery_sim <config.json> [--log <path>]
+// delivery_sim <config.json> [--log <path>] [--headless] [--bench <csv>] [--bench-once]
+//
+// Con --bench o --bench-once no simula: mide las aplicaciones de GPU de EC2 (bench.hpp) y termina. Con
+// --headless no abre la ventana (la simulación es la misma).
 //
 // Lee y valida la configuración; si algo no se puede usar (argumentos, archivo, JSON,
 // propiedades, referencias a nodos, rangos), lo explica en stderr y sale con código distinto
@@ -11,8 +14,12 @@
 #include <string>
 #include <vector>
 
+#include "bench.hpp"
 #include "cli.hpp"
 #include "config.hpp"
+#ifdef DELIVERY_USE_CUDA
+#include "gpu/gpu_owner.hpp"
+#endif
 #include "simulation.hpp"
 #include "stop_signal.hpp"
 #include "window.hpp"
@@ -32,6 +39,27 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    if (args.bench()) {
+        // EC2: no simula. Mide las aplicaciones de GPU con los datos de la configuración y termina.
+        const SimParams params = paramsFromConfig(config);
+        std::ofstream file;
+        std::ostream discard(nullptr);  // --bench-once sin --bench: sin CSV
+        if (!args.benchPath.empty()) {
+            file.open(args.benchPath);
+            if (!file) {
+                std::cerr << "delivery_sim: no se pudo abrir '" << args.benchPath << "' para escribir el CSV\n";
+                return 1;
+            }
+        }
+        std::ostream& csv = args.benchPath.empty() ? discard : file;
+        try {
+            return runBenchmarks(params, csv, std::cerr, args.benchOnce ? 1 : kBenchRepetitions);
+        } catch (const std::exception& e) {  // p. ej. la GPU no se pudo preparar
+            std::cerr << "delivery_sim: el bench falló: " << e.what() << "\n";
+            return 1;
+        }
+    }
+
     std::ofstream log(args.logPath);
     if (!log) {
         std::cerr << "delivery_sim: no se pudo abrir '" << args.logPath << "' para escribir el log\n";
@@ -42,12 +70,22 @@ int main(int argc, char** argv)
     // ANTES de crear cualquier hilo (paramsFromConfig ya lanza los Dijkstra con std::async): así sus
     // variables de entorno se ponen sin otros hilos, y la memoria de los hilos que crea Qt no aparece
     // en Valgrind con la pila de un hilo nuestro (glibc reutiliza las pilas de hilos terminados).
-    std::string whyNot;
-    const std::unique_ptr<MapWindow> window = MapWindow::open(config, whyNot);
-    const SimParams params = paramsFromConfig(config);
+    std::string whyNot = "--headless";
+    const std::unique_ptr<MapWindow> window = args.headless ? nullptr : MapWindow::open(config, whyNot);
+    SimParams params = paramsFromConfig(config);
     if (window) {
         window->setWorld(params.world);
     }
+#ifdef DELIVERY_USE_CUDA
+    // EC2: el hilo dueño de la GPU, para el prefiltro de las motos más cercanas (R1). Sin GPU usable, el
+    // despachador sigue como siempre, en la CPU.
+    try {
+        params.gpu = std::make_shared<GpuOwner>(static_cast<std::size_t>(config.couriers));
+        std::cerr << "delivery_sim: GPU: " << params.gpu->deviceName() << "\n";
+    } catch (const std::exception& e) {
+        std::cerr << "delivery_sim: sin GPU (" << e.what() << "); el despacho sigue en la CPU\n";
+    }
+#endif
     FrameHook onFrame;
     // Cuándo se dibujó el último frame: ahí se vio la orden de parar (señal, tiempo o ventana). Lo
     // escribe y lo lee solo este hilo (el hook corre en el bucle de frames, en el hilo principal).

@@ -22,10 +22,37 @@ if(ENABLE_TSAN AND NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   message(FATAL_ERROR "ENABLE_TSAN requiere GCC o Clang")
 endif()
 
+# --- GPU (EC2): apagada por defecto ---
+# Sin USE_CUDA, todo compila con el CMake 3.11 de la sección 8 y los .cu se compilan como C++ (ver
+# delivery_cuda_sources). Con USE_CUDA=ON los compila nvcc; eso pide CMake 3.18 (CMAKE_CUDA_ARCHITECTURES y
+# CUDA 17), que solo se usa en la máquina con GPU (Google Colab). Arquitectura por defecto: sm_75, la T4.
+option(USE_CUDA "Compilar los kernels con nvcc para una GPU NVIDIA real (pide CMake >= 3.18)" OFF)
+if(USE_CUDA)
+  if(CMAKE_VERSION VERSION_LESS 3.18)
+    message(FATAL_ERROR "USE_CUDA=ON pide CMake 3.18 o posterior (sin CUDA alcanza 3.11)")
+  endif()
+  if(ENABLE_TSAN)
+    message(FATAL_ERROR "USE_CUDA y ENABLE_TSAN no se combinan: TSan se corre sobre el build sin CUDA")
+  endif()
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 75)
+  endif()
+  enable_language(CUDA)
+  set(CMAKE_CUDA_STANDARD 17)
+  set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+  set(CMAKE_CUDA_EXTENSIONS OFF)
+endif()
+
 # --- Dependencias ---
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
-find_package(OpenCV 4.1 REQUIRED COMPONENTS core imgproc imgcodecs highgui)
+# Ventana (OpenCV): encendida por defecto, como pide la sección 8. Apagada, delivery_sim se compila sin
+# OpenCV y corre sin ventana, igual que cuando no hay pantalla. Sirve en la máquina con GPU (Google Colab),
+# donde no hay pantalla e instalar libopencv-dev tarda más de 30 minutos.
+option(DELIVERY_WINDOW "Compilar la ventana con OpenCV" ON)
+if(DELIVERY_WINDOW)
+  find_package(OpenCV 4.1 REQUIRED COMPONENTS core imgproc imgcodecs highgui)
+endif()
 
 # JSON: nlohmann/json 3.12.0 (MIT, solo headers). FetchContent lo descarga al configurar
 # (necesita internet en `cmake ..`): solo los headers del release, verificados por hash.
@@ -60,7 +87,11 @@ function(delivery_target_options target)
   target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
   target_link_libraries(${target} PRIVATE Threads::Threads)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(${target} PRIVATE -Wall -Wextra)
+    # Solo a los archivos de C++: nvcc no entiende -Wall; a los .cu se los pasa al compilador del host.
+    target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall> $<$<COMPILE_LANGUAGE:CXX>:-Wextra>)
+    if(USE_CUDA)
+      target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra>)
+    endif()
     if(DELIVERY_WERROR)
       target_compile_options(${target} PRIVATE -Werror)
     endif()
@@ -89,16 +120,28 @@ add_executable(delivery_sim
   src/fleet.cpp
   src/order_book.cpp
   src/event_log.cpp
-  src/window.cpp
+  src/nearest.cpp
+  src/bench.cpp
 )
 delivery_target_options(delivery_sim)
-if(ENABLE_TSAN)
-  # Supresiones de TSan para las bibliotecas gráficas que usa OpenCV (ver el archivo).
-  target_sources(delivery_sim PRIVATE src/tsan_suppressions.cpp)
+target_link_libraries(delivery_sim PRIVATE nlohmann_json)
+if(USE_CUDA)
+  # EC2: el hilo dueño de la GPU y los kernels. Sin USE_CUDA, delivery_sim no tiene nada de GPU (ni la emulación).
+  target_sources(delivery_sim PRIVATE src/gpu/nearest_gpu.cu src/gpu/gpu_owner.cpp)
+  target_compile_definitions(delivery_sim PRIVATE DELIVERY_USE_CUDA)
 endif()
-# SYSTEM: los warnings de los headers de OpenCV no cuentan como nuestros.
-target_include_directories(delivery_sim SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(delivery_sim PRIVATE ${OpenCV_LIBS} nlohmann_json)
+if(DELIVERY_WINDOW)
+  target_sources(delivery_sim PRIVATE src/window.cpp)
+  if(ENABLE_TSAN)
+    # Supresiones de TSan para las bibliotecas gráficas que usa OpenCV (ver el archivo).
+    target_sources(delivery_sim PRIVATE src/tsan_suppressions.cpp)
+  endif()
+  # SYSTEM: los warnings de los headers de OpenCV no cuentan como nuestros.
+  target_include_directories(delivery_sim SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(delivery_sim PRIVATE ${OpenCV_LIBS})
+else()
+  target_sources(delivery_sim PRIVATE src/window_off.cpp)
+endif()
 
 # --- Pruebas: se compilan con `make` y se ejecutan con `ctest` ---
 enable_testing()
@@ -257,3 +300,28 @@ set_tests_properties(delivery_sim_sin_argumentos delivery_sim_archivo_inexistent
 if(ENABLE_TSAN)
   message(STATUS "ThreadSanitizer: activado")
 endif()
+
+# --- GPU (EC2): kernels y sus pruebas de igualdad ---
+# Con USE_CUDA=ON los .cu los compila nvcc. Sin CUDA, el compilador de C++ los compila como C++ (-x c++) y
+# src/gpu/cuda_compat.h emula la GPU con hilos: sirve para las pruebas gpu_*_check (el kernel da lo mismo que
+# la CPU), nunca para medir. COMPILE_OPTIONS de un archivo existe desde CMake 3.11.
+function(delivery_cuda_sources)
+  if(NOT USE_CUDA)
+    set_source_files_properties(${ARGN} PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-x;c++")
+  endif()
+endfunction()
+
+delivery_cuda_sources(tests/gpu_smoke_check.cu tests/gpu_nearest_check.cu src/gpu/nearest_gpu.cu)
+add_executable(gpu_smoke_check tests/gpu_smoke_check.cu)
+delivery_target_options(gpu_smoke_check)
+add_test(NAME gpu_smoke_check COMMAND gpu_smoke_check)
+
+# R1: las motos más cercanas (reducción). Versiones de CPU y prueba de igualdad de la GPU.
+add_executable(nearest_check tests/nearest_check.cpp src/nearest.cpp src/road_graph.cpp src/thread_pool.cpp)
+delivery_target_options(nearest_check)
+add_test(NAME nearest_check COMMAND nearest_check)
+
+add_executable(gpu_nearest_check tests/gpu_nearest_check.cu src/gpu/nearest_gpu.cu src/gpu/gpu_owner.cpp
+               src/nearest.cpp src/road_graph.cpp src/thread_pool.cpp)
+delivery_target_options(gpu_nearest_check)
+add_test(NAME gpu_nearest_check COMMAND gpu_nearest_check)

@@ -1,5 +1,7 @@
 #include "cli.hpp"
 
+#include <set>
+
 namespace {
 
 bool isFlag(const std::string& arg) { return arg.rfind("--", 0) == 0; }
@@ -16,24 +18,31 @@ CliArgs parseArgs(const std::vector<std::string>& args)
     }
     CliArgs result;
     result.configPath = args[0];
-    bool logSeen = false;
+    std::set<std::string> seen;
     for (std::size_t i = 1; i < args.size(); ++i) {
-        if (args[i] != "--log") {
-            throw CliError("argumento desconocido '" + args[i] + "'");
+        const std::string& flag = args[i];
+        if (flag != "--log" && flag != "--headless" && flag != "--bench" && flag != "--bench-once") {
+            throw CliError("argumento desconocido '" + flag + "'");
         }
-        if (logSeen) {
-            throw CliError("--log aparece más de una vez");
+        if (!seen.insert(flag).second) {
+            throw CliError(flag + " aparece más de una vez");
         }
-        if (i + 1 == args.size() || isFlag(args[i + 1])) {
-            throw CliError("--log necesita la ruta del archivo de log");
+        if (flag == "--headless") {
+            result.headless = true;
+        } else if (flag == "--bench-once") {
+            result.benchOnce = true;
+        } else {  // --log y --bench llevan una ruta
+            if (i + 1 == args.size() || isFlag(args[i + 1])) {
+                throw CliError(flag == "--log" ? "--log necesita la ruta del archivo de log"
+                                               : "--bench necesita la ruta del archivo CSV");
+            }
+            (flag == "--log" ? result.logPath : result.benchPath) = args[++i];
         }
-        result.logPath = args[++i];
-        logSeen = true;
     }
     return result;
 }
 
 const char* usage()
 {
-    return "uso: delivery_sim <config.json> [--log <path>]\n";
+    return "uso: delivery_sim <config.json> [--log <path>] [--headless] [--bench <csv>] [--bench-once]\n";
 }
