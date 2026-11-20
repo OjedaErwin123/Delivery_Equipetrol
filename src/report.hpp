@@ -18,6 +18,10 @@
 struct LogReplay {
     std::vector<std::uint32_t> deliveryMs;  // por pedido entregado: t(orderDelivered) - t(orderCreated)
     std::uint64_t delivered = 0;            // líneas orderDelivered
+    // SC1: los restaurantes en el orden en que aparecen por primera vez en el log, y por pedido creado (en el orden
+    // de las líneas orderCreated) el índice de su restaurante en `restaurants`.
+    std::vector<std::string> restaurants;
+    std::vector<std::uint32_t> restaurantOf;
 };
 
 // Lee un log de delivery_sim (un JSON por línea). Lanza std::runtime_error con el número de línea si una no se

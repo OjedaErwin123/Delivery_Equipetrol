@@ -25,6 +25,7 @@ GpuOwner::~GpuOwner()
             _nearest.reset();
             _apsp.reset();
             _histogram.reset();
+            _grouping.reset();
             return true;
         })
         .get();
@@ -66,6 +67,21 @@ std::future<ThreadPool::Outcome<GpuOwner::HistogramResult>> GpuOwner::histogram(
         }
         HistogramResult result;
         result.counts = privatize ? _histogram->privatized(ms, &result.timing) : _histogram->globalAtomics(ms, &result.timing);
+        return result;
+    });
+}
+
+std::future<ThreadPool::Outcome<GpuOwner::GroupResult>> GpuOwner::group(std::vector<std::uint32_t> restaurantOf,
+                                                                        std::size_t restaurants)
+{
+    return _thread.submit([this, restaurantOf = std::move(restaurantOf), restaurants] {
+        if (!_grouping || restaurantOf.size() > _groupingCapacity) {
+            _grouping.reset();
+            _groupingCapacity = std::max<std::size_t>(restaurantOf.size(), 1);
+            _grouping = std::make_unique<GroupingGpu>(_groupingCapacity);
+        }
+        GroupResult result;
+        result.grouping = _grouping->group(restaurantOf, restaurants, &result.timing);
         return result;
     });
 }

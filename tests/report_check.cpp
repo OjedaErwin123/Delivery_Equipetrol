@@ -2,7 +2,9 @@
 // (replayLog) y el reporte (writeReport, en la CPU). Uso: report_check <config.json>.
 //  - H1: un tiempo por pedido entregado; la suma de las cajas = las entregas del resumen = las líneas
 //    orderDelivered; el promedio y el máximo recalculados desde el log = los del resumen;
-//  - una línea del log que no es JSON se informa con su número de línea.
+//  - SC1: un restaurante por pedido creado; grupos contiguos, con solo pedidos de su restaurante, en orden de
+//    creación; conteos = los recontados;
+//  - una línea del log que no es JSON, o a la que le falta un campo, se informa con su número de línea.
 // Sale con 0 si todo está bien.
 #include <algorithm>
 #include <atomic>
@@ -13,6 +15,7 @@
 #include <nlohmann/json.hpp>
 
 #include "config.hpp"
+#include "grouping.hpp"
 #include "log_line.hpp"
 #include "report.hpp"
 #include "simulation.hpp"
@@ -55,14 +58,49 @@ int main(int argc, char** argv)
     ok &= check("p50 <= p90 <= p99", h1.at("p50Minute").get<int>() <= h1.at("p90Minute").get<int>() &&
                                          h1.at("p90Minute").get<int>() <= h1.at("p99Minute").get<int>());
 
-    bool reported = false;
-    try {
-        std::istringstream bad("{\"t\": 0, \"event\": \"orderCreated\", \"order\": \"o0\"}\nesto no es JSON\n");
-        replayLog(bad);
-    } catch (const std::runtime_error& error) {
-        reported = std::string(error.what()).find("línea 2") != std::string::npos;
-        std::cout << "error esperado: \"" << std::string(error.what()).substr(0, 60) << "…\"\n";
+    // SC1: un pedido por línea orderCreated; los grupos cubren todos los pedidos sin huecos; cada grupo tiene solo
+    // pedidos de su restaurante, en orden de creación (estable); los conteos = los recontados desde el log.
+    const nlohmann::json& sc1 = report.at("sc1_ordersByRestaurant");
+    std::cout << "SC1: " << sc1.at("created") << " pedidos en " << replay.restaurants.size()
+              << " restaurantes · calculado en " << sc1.at("computedOn") << "\n";
+    ok &= check("un restaurante por pedido creado (= created del resumen)",
+                replay.restaurantOf.size() == static_cast<std::size_t>(s.created) &&
+                    sc1.at("created").get<int>() == s.created);
+    const Grouping groups = groupByRestaurant(replay.restaurantOf, replay.restaurants.size());
+    bool contiguous = true, own = true, stable = true, counts = true;
+    std::uint32_t expectedOffset = 0;
+    for (std::size_t r = 0; r < replay.restaurants.size(); ++r) {
+        const nlohmann::json& entry = sc1.at("restaurants").at(replay.restaurants[r]);
+        const auto mine = static_cast<std::uint32_t>(
+            std::count(replay.restaurantOf.begin(), replay.restaurantOf.end(), static_cast<std::uint32_t>(r)));
+        counts &= entry.at("orders").get<std::uint32_t>() == mine;
+        contiguous &= entry.at("offset").get<std::uint32_t>() == expectedOffset;
+        expectedOffset += mine;
+        for (std::uint32_t k = groups.offsets[r]; k < groups.offsets[r + 1]; ++k) {
+            own &= replay.restaurantOf[groups.order[k]] == r;
+            stable &= k == groups.offsets[r] || groups.order[k - 1] < groups.order[k];
+        }
     }
-    ok &= check("una línea que no es JSON se informa con su número", reported);
+    ok &= check("los conteos por restaurante = los recontados desde el log", counts);
+    ok &= check("los grupos van uno detrás del otro, sin huecos (scan exclusivo)",
+                contiguous && expectedOffset == replay.restaurantOf.size());
+    ok &= check("cada grupo tiene solo pedidos de su restaurante, en orden de creación", own && stable);
+
+    auto lineOfError = [](const std::string& text) {
+        try {
+            std::istringstream bad(text);
+            replayLog(bad);
+        } catch (const std::runtime_error& error) {
+            std::cout << "error esperado: \"" << std::string(error.what()).substr(0, 60) << "…\"\n";
+            return std::string(error.what());
+        }
+        return std::string();
+    };
+    const std::string created = "{\"t\": 0, \"event\": \"orderCreated\", \"order\": \"o0\", \"restaurant\": \"r0\"}\n";
+    ok &= check("una línea que no es JSON se informa con su número",
+                lineOfError(created + "esto no es JSON\n").find("línea 2") != std::string::npos);
+    ok &= check("un orderCreated sin restaurante se informa con su número",
+                lineOfError(created + "{\"t\": 5, \"event\": \"orderCreated\", \"order\": \"o1\"}\n").find("línea 2") !=
+                    std::string::npos);
     return ok ? 0 : 1;
 }

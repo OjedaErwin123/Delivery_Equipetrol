@@ -7,6 +7,7 @@
 
 #include "apsp.hpp"
 #include "gpu/apsp_gpu.hpp"
+#include "gpu/grouping_gpu.hpp"
 #include "gpu/histogram_gpu.hpp"
 #include "gpu/nearest_gpu.hpp"
 #include "thread_pool.hpp"
@@ -53,6 +54,15 @@ public:
     // atómicos globales (para comparar). La memoria se reserva en el primer pedido o si llegan más datos.
     std::future<ThreadPool::Outcome<HistogramResult>> histogram(std::vector<std::uint32_t> ms, bool privatize);
 
+    struct GroupResult {
+        Grouping grouping;
+        GroupingGpu::Timing timing;
+    };
+    // SC1: encola el agrupamiento estable de los pedidos por restaurante (counting sort con scan). Hasta
+    // GroupingGpu::kMaxRestaurants restaurantes (si son más, el future trae la excepción). La memoria se reserva en
+    // el primer pedido o si llegan más pedidos.
+    std::future<ThreadPool::Outcome<GroupResult>> group(std::vector<std::uint32_t> restaurantOf, std::size_t restaurants);
+
     // El nombre del dispositivo (leído en el hilo dueño al crear el objeto).
     const std::string& deviceName() const { return _deviceName; }
 
@@ -62,6 +72,8 @@ private:
     std::size_t _apspStride = 0;           // ídem: el tamaño reservado para _apsp
     std::unique_ptr<HistogramGpu> _histogram;  // ídem
     std::size_t _histogramCapacity = 0;        // ídem
+    std::unique_ptr<GroupingGpu> _grouping;    // ídem
+    std::size_t _groupingCapacity = 0;         // ídem
     std::string _deviceName;
     ThreadPool _thread{1};                  // se destruye primero: join antes de que _nearest deje de existir
 };
