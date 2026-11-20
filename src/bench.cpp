@@ -15,6 +15,7 @@
 
 #include "apsp.hpp"
 #include "coverage.hpp"
+#include "diffusion.hpp"
 #include "grouping.hpp"
 #include "heatmap.hpp"
 #include "histogram.hpp"
@@ -615,6 +616,72 @@ void benchCoverage(const SimParams& params, Csv& csv, std::ostream& progress, in
     }
 }
 
+// S2: la difusión de la demanda, 100 pasos de Jacobi de 5 puntos en flotantes por corrida. Tamaño = celdas: lados de
+// 64 a 2048 (de 4096 a 4,2 millones de celdas, tres órdenes de magnitud). Grilla inicial dispersa como la de C1 (una
+// celda de cada 50 con pedidos; semilla fija). Correcto = dentro de 1e-5 del mayor valor inicial (flotantes con FMA;
+// ver diffusion.hpp). Además de las cuatro versiones, gpu_kernel_basic: el stencil sin coarsening.
+void benchDiffusion(const SimParams&, Csv& csv, std::ostream& progress, int repetitions, GpuOwner* gpu)
+{
+    static const char* kApp = "s2_diffusion";
+    constexpr int kSteps = 100;
+    std::map<std::size_t, std::unique_ptr<ThreadPool>> pools;
+    for (std::size_t t : threadCounts()) {
+        pools[t] = std::make_unique<ThreadPool>(t);
+    }
+#ifndef DELIVERY_USE_CUDA
+    (void)gpu;
+#endif
+    for (int side : {64, 128, 256, 512, 1024, 2048}) {
+        std::mt19937 random(static_cast<std::uint32_t>(31 + side));
+        Grid initial;
+        initial.width = initial.height = side;
+        initial.cells.assign(static_cast<std::size_t>(side) * side, 0.0f);
+        for (float& cell : initial.cells) {
+            if (random() % 50 == 0) {
+                cell = static_cast<float>(1 + random() % 20);
+            }
+        }
+        const std::size_t n = initial.cells.size();
+        const Grid reference = diffuse(initial, kSteps);
+        const float tolerance = 1e-5f * maxValue(initial);
+        auto close = [&](const Grid& g) { return maxDifference(g, reference) <= tolerance; };
+        auto runAll = [&](int rep) {
+            auto start = std::chrono::steady_clock::now();
+            bool ok = close(diffuse(initial, kSteps));
+            double took = msSince(start);
+            if (rep >= 0) {
+                csv.row(kApp, "cpu_1", 1, n, rep, took, ok);
+            }
+            for (auto& pool : pools) {
+                start = std::chrono::steady_clock::now();
+                const Grid out = diffuseParallel(initial, kSteps, *pool.second);
+                took = msSince(start);
+                if (rep >= 0) {
+                    csv.row(kApp, "cpu_threads", pool.first, n, rep, took, close(out));
+                }
+            }
+#ifdef DELIVERY_USE_CUDA
+            start = std::chrono::steady_clock::now();
+            const GpuOwner::DiffusionResult result = gpu->diffusion(initial, kSteps, true).get().take();
+            took = msSince(start);
+            ok = close(result.grid);
+            const GpuOwner::DiffusionResult basic = gpu->diffusion(initial, kSteps, false).get().take();
+            if (rep >= 0) {
+                csv.row(kApp, "gpu_kernel", 1, n, rep, result.timing.kernelMs, ok);
+                csv.row(kApp, "gpu_end_to_end", 1, n, rep, result.timing.endToEndMs, ok);
+                csv.row(kApp, "gpu_via_owner", 1, n, rep, took, ok);
+                csv.row(kApp, "gpu_kernel_basic", 1, n, rep, basic.timing.kernelMs, close(basic.grid));
+            }
+#endif
+        };
+        runAll(-1);
+        for (int rep = 0; rep < repetitions; ++rep) {
+            runAll(rep);
+        }
+        progress << kApp << " n=" << n << ":" << csv.medians() << "\n";
+    }
+}
+
 }  // namespace
 
 int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& progress, int repetitions,
@@ -630,6 +697,7 @@ int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& prog
         {"h2_hour_restaurant", benchSlotHistogram},
         {"c1_heatmap", benchHeatmap},
         {"s1_coverage", benchCoverage},
+        {"s2_diffusion", benchDiffusion},
     };
     if (!only.empty() &&
         std::none_of(apps.begin(), apps.end(), [&only](const auto& app) { return app.first == only; })) {

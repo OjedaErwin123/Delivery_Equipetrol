@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include "coverage.hpp"
+#include "diffusion.hpp"
 #include "grouping.hpp"
 #include "heatmap.hpp"
 #include "histogram.hpp"
@@ -96,23 +97,59 @@ struct CityGrid {
     }
 };
 
+// La grilla de la demanda (C1 y S2): cada pedido creado suma 1 en la celda de su restaurante.
+Grid demandGrid(const LogReplay& replay, const World& world, const CityGrid& city)
+{
+    std::vector<std::size_t> cellOfRestaurant;
+    for (const std::string& r : replay.restaurants) {
+        cellOfRestaurant.push_back(city.cellOf(world.graph.coordinates(world.restaurantNode.at(r))));
+    }
+    Grid in;
+    in.width = in.height = city.side;
+    in.cells.assign(static_cast<std::size_t>(city.side) * city.side, 0.0f);
+    for (std::uint32_t r : replay.restaurantOf) {
+        in.cells[cellOfRestaurant[r]] += 1.0f;
+    }
+    return in;
+}
+
+// Las `count` celdas de mayor valor (empates: la de menor índice), con su centro en coordenadas.
+nlohmann::json hottest(const Grid& grid, const CityGrid& city, int count)
+{
+    std::vector<std::size_t> order(grid.cells.size());
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        order[i] = i;
+    }
+    const std::size_t shown = std::min<std::size_t>(static_cast<std::size_t>(count), order.size());
+    std::partial_sort(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(shown), order.end(),
+                      [&grid](std::size_t a, std::size_t b) {
+                          return grid.cells[a] != grid.cells[b] ? grid.cells[a] > grid.cells[b] : a < b;
+                      });
+    nlohmann::json cells = nlohmann::json::array();
+    for (std::size_t k = 0; k < shown; ++k) {
+        const int x = static_cast<int>(order[k] % grid.width), y = static_cast<int>(order[k] / grid.width);
+        cells.push_back(
+            {{"x", x}, {"y", y}, {"lat", city.latOf(y)}, {"lon", city.lonOf(x)}, {"value", grid.cells[order[k]]}});
+    }
+    return cells;
+}
+
+double total(const Grid& grid)
+{
+    double sum = 0;
+    for (float v : grid.cells) {
+        sum += v;
+    }
+    return sum;
+}
+
 // C1: el mapa de calor de la demanda. Una grilla de kHeatmapSide x kHeatmapSide sobre los límites de la red; cada
 // pedido creado suma 1 en la celda de su restaurante; después, la convolución gaussiana (en la GPU, por bloques; o en
 // la CPU). Informa las celdas más calientes con su centro en coordenadas.
 nlohmann::json heatmapReport(const LogReplay& replay, const World& world, GpuOwner* gpu)
 {
-    const RoadGraph& graph = world.graph;
-    const CityGrid city(graph, kHeatmapSide);
-    std::vector<std::size_t> cellOfRestaurant;
-    for (const std::string& r : replay.restaurants) {
-        cellOfRestaurant.push_back(city.cellOf(graph.coordinates(world.restaurantNode.at(r))));
-    }
-    Grid in;
-    in.width = in.height = kHeatmapSide;
-    in.cells.assign(static_cast<std::size_t>(kHeatmapSide) * kHeatmapSide, 0.0f);
-    for (std::uint32_t r : replay.restaurantOf) {
-        in.cells[cellOfRestaurant[r]] += 1.0f;
-    }
+    const CityGrid city(world.graph, kHeatmapSide);
+    const Grid in = demandGrid(replay, world, city);
 
     const std::vector<float> filter = gaussianFilter();
     Grid out;
@@ -128,28 +165,8 @@ nlohmann::json heatmapReport(const LogReplay& replay, const World& world, GpuOwn
     if (out.cells.empty()) {
         out = convolve(in, filter);
     }
-    std::vector<std::size_t> order(out.cells.size());
-    for (std::size_t i = 0; i < order.size(); ++i) {
-        order[i] = i;
-    }
-    const std::size_t shown = std::min<std::size_t>(kHotspots, order.size());
-    std::partial_sort(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(shown), order.end(),
-                      [&out](std::size_t a, std::size_t b) {
-                          return out.cells[a] != out.cells[b] ? out.cells[a] > out.cells[b] : a < b;
-                      });
-    nlohmann::json hotspots = nlohmann::json::array();
-    for (std::size_t k = 0; k < shown; ++k) {
-        const int x = static_cast<int>(order[k] % kHeatmapSide), y = static_cast<int>(order[k] / kHeatmapSide);
-        hotspots.push_back(
-            {{"x", x}, {"y", y}, {"lat", city.latOf(y)}, {"lon", city.lonOf(x)}, {"value", out.cells[order[k]]}});
-    }
-    double placed = 0, smoothed = 0;
-    for (float v : in.cells) {
-        placed += v;
-    }
-    for (float v : out.cells) {
-        smoothed += v;
-    }
+    const nlohmann::json hotspots = hottest(out, city, kHotspots);
+    const double placed = total(in), smoothed = total(out);
     return {
         {"computedOn", where},
         {"width", kHeatmapSide},
@@ -159,6 +176,44 @@ nlohmann::json heatmapReport(const LogReplay& replay, const World& world, GpuOwn
         {"ordersPlaced", placed},
         {"smoothedTotal", smoothed},
         {"hotspots", hotspots},
+    };
+}
+
+// S2: la difusión de la demanda. La grilla de pedidos de C1 (la misma de kHeatmapSide x kHeatmapSide), difundida
+// kDiffusionSteps pasos (en la GPU, con coarsening; o en la CPU): cada paso reparte la demanda a las celdas vecinas y
+// la apaga un poco (kKeep), como si lo pedido hace rato pesara menos. Informa cuánto queda, el pico antes y después,
+// y las celdas más calientes al final.
+constexpr int kDiffusionSteps = 50;
+
+nlohmann::json diffusionReport(const LogReplay& replay, const World& world, GpuOwner* gpu)
+{
+    const CityGrid city(world.graph, kHeatmapSide);
+    const Grid start = demandGrid(replay, world, city);
+    Grid end;
+    std::string where = "CPU";
+#ifdef DELIVERY_USE_CUDA
+    if (gpu != nullptr) {
+        end = gpu->diffusion(start, kDiffusionSteps, true).get().take().grid;
+        where = "GPU (" + gpu->deviceName() + ")";
+    }
+#else
+    (void)gpu;
+#endif
+    if (end.cells.empty()) {
+        end = diffuse(start, kDiffusionSteps);
+    }
+    return {
+        {"computedOn", where},
+        {"width", kHeatmapSide},
+        {"height", kHeatmapSide},
+        {"steps", kDiffusionSteps},
+        {"spread", kSpread},
+        {"keep", kKeep},
+        {"totalStart", total(start)},
+        {"totalEnd", total(end)},
+        {"peakStart", maxValue(start)},
+        {"peakEnd", maxValue(end)},
+        {"hotspots", hottest(end, city, kHotspots)},
     };
 }
 
@@ -373,6 +428,7 @@ void writeReport(const LogReplay& replay, const World* world, GpuOwner* gpu, std
     if (world != nullptr) {
         report["c1_demandHeatmap"] = heatmapReport(replay, *world, gpu);
         report["s1_coverage"] = coverageReport(*world, gpu);
+        report["s2_demandDiffusion"] = diffusionReport(replay, *world, gpu);
     }
 
     nlohmann::json perRestaurant = nlohmann::json::object();

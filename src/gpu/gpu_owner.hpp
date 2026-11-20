@@ -8,6 +8,7 @@
 #include "apsp.hpp"
 #include "gpu/apsp_gpu.hpp"
 #include "gpu/coverage_gpu.hpp"
+#include "gpu/diffusion_gpu.hpp"
 #include "gpu/grouping_gpu.hpp"
 #include "gpu/heatmap_gpu.hpp"
 #include "gpu/histogram_gpu.hpp"
@@ -104,6 +105,15 @@ public:
     // primer pedido o si llega una grilla más grande.
     std::future<ThreadPool::Outcome<CoverageResult>> coverage(CoverageGrid grid, int sweeps, bool tiled);
 
+    struct DiffusionResult {
+        Grid grid;
+        DiffusionGpu::Timing timing;
+    };
+    // S2: encola `steps` pasos de Jacobi de la difusión de la demanda, con coarsening por columnas (`coarsened`) o
+    // básicos (para comparar). Los datos se quedan en la GPU entre pasos. La memoria se reserva en el primer pedido o
+    // si llega una grilla más grande.
+    std::future<ThreadPool::Outcome<DiffusionResult>> diffusion(Grid start, int steps, bool coarsened);
+
     // El nombre del dispositivo (leído en el hilo dueño al crear el objeto).
     const std::string& deviceName() const { return _deviceName; }
 
@@ -123,6 +133,8 @@ private:
     std::size_t _heatmapCells = 0;                              // ídem
     std::unique_ptr<CoverageGpu> _coverage;                     // ídem
     std::size_t _coverageCells = 0;                             // ídem
+    std::unique_ptr<DiffusionGpu> _diffusion;                   // ídem
+    std::size_t _diffusionCells = 0;                            // ídem
     std::string _deviceName;
     ThreadPool _thread{1};                  // se destruye primero: join antes de que _nearest deje de existir
 };

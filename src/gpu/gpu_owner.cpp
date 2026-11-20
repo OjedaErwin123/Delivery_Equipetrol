@@ -30,6 +30,7 @@ GpuOwner::~GpuOwner()
             _slotHistogram.reset();
             _heatmap.reset();
             _coverage.reset();
+            _diffusion.reset();
             return true;
         })
         .get();
@@ -150,6 +151,20 @@ std::future<ThreadPool::Outcome<GpuOwner::CoverageResult>> GpuOwner::coverage(Co
         }
         CoverageResult result;
         result.distance = _coverage->relax(grid, sweeps, tiled, &result.timing);
+        return result;
+    });
+}
+
+std::future<ThreadPool::Outcome<GpuOwner::DiffusionResult>> GpuOwner::diffusion(Grid start, int steps, bool coarsened)
+{
+    return _thread.submit([this, start = std::move(start), steps, coarsened] {
+        if (!_diffusion || start.cells.size() > _diffusionCells) {
+            _diffusion.reset();
+            _diffusionCells = std::max<std::size_t>(start.cells.size(), 1);
+            _diffusion = std::make_unique<DiffusionGpu>(_diffusionCells);
+        }
+        DiffusionResult result;
+        result.grid = _diffusion->diffuse(start, steps, coarsened, &result.timing);
         return result;
     });
 }

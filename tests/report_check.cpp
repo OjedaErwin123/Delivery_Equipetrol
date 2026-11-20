@@ -9,10 +9,12 @@
 //  - C1: los pedidos en la grilla = creados; lo suavizado conserva el total salvo bordes; celdas calientes en orden y
 //    dentro del mapa; sin mapa no aparece;
 //  - S1: el campo de cobertura convergió; toda celda con calles llega a un restaurante; percentiles en orden;
+//  - S2: parte de la demanda de C1; queda a lo sumo kKeep^pasos del total; el pico baja;
 //  - una línea del log que no es JSON, o a la que le falta un campo, se informa con su número de línea.
 // Sale con 0 si todo está bien.
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <iostream>
 #include <numeric>
 #include <sstream>
@@ -20,6 +22,7 @@
 #include <nlohmann/json.hpp>
 
 #include "config.hpp"
+#include "diffusion.hpp"
 #include "grouping.hpp"
 #include "log_line.hpp"
 #include "report.hpp"
@@ -184,6 +187,25 @@ int main(int argc, char** argv)
                     s1.at("p90Cost").get<int>() <= s1.at("maxCost").get<int>() &&
                     worst.at("lat").get<double>() >= b.at("minLat").get<double>() - 1e-9 &&
                     worst.at("lat").get<double>() <= b.at("maxLat").get<double>() + 1e-9);
+
+    // S2: parte de la misma demanda que C1; cada paso apaga kKeep y por los bordes se pierde, así que al final queda
+    // a lo sumo kKeep^pasos del total; el pico baja (la demanda se reparte); celdas calientes de mayor a menor.
+    const nlohmann::json& s2 = report.at("s2_demandDiffusion");
+    const double startTotal = s2.at("totalStart").get<double>(), endTotal = s2.at("totalEnd").get<double>();
+    const double decay = std::pow(static_cast<double>(kKeep), s2.at("steps").get<int>());
+    const nlohmann::json& hot2 = s2.at("hotspots");
+    bool ordered2 = !hot2.empty();
+    for (std::size_t k = 1; k < hot2.size(); ++k) {
+        ordered2 &= hot2[k - 1].at("value").get<double>() >= hot2[k].at("value").get<double>();
+    }
+    std::cout << "S2: " << s2.at("steps") << " pasos, total " << startTotal << " -> " << endTotal << ", pico "
+              << s2.at("peakStart") << " -> " << s2.at("peakEnd") << " · calculado en " << s2.at("computedOn")
+              << "\n";
+    ok &= check("S2: parte de la demanda de C1 (un pedido por pedido creado)", startTotal == placed);
+    ok &= check("S2: al final queda a lo sumo kKeep^pasos del total, y algo queda",
+                endTotal <= startTotal * decay * (1 + 1e-4) && endTotal > 0);
+    ok &= check("S2: el pico baja y las celdas calientes van de mayor a menor",
+                s2.at("peakEnd").get<double>() < s2.at("peakStart").get<double>() && ordered2);
 
     auto lineOfError = [](const std::string& text) {
         try {
