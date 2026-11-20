@@ -6,6 +6,8 @@
 //    creación; conteos = los recontados;
 //  - R2: por restaurante, creados y entregas suman los del resumen; máximo y promedio = los del resumen;
 //  - H2: las franjas de cada restaurante suman sus pedidos; cada pedido en la franja de su t; el pico es el máximo;
+//  - C1: los pedidos en la grilla = creados; lo suavizado conserva el total salvo bordes; celdas calientes en orden y
+//    dentro del mapa; sin mapa no aparece;
 //  - una línea del log que no es JSON, o a la que le falta un campo, se informa con su número de línea.
 // Sale con 0 si todo está bien.
 #include <algorithm>
@@ -42,7 +44,7 @@ int main(int argc, char** argv)
     std::istringstream log(logOut.str());
     const LogReplay replay = replayLog(log);
     std::ostringstream reportOut;
-    writeReport(replay, nullptr, reportOut);
+    writeReport(replay, p.world.get(), nullptr, reportOut);
     const nlohmann::json report = nlohmann::json::parse(reportOut.str());
     const nlohmann::json& h1 = report.at("h1_deliveryTimes");
     std::cout << "entregas " << s.delivered << " · p50 " << h1.at("p50Minute") << " min · p90 " << h1.at("p90Minute")
@@ -138,6 +140,33 @@ int main(int argc, char** argv)
     ok &= check("H2: las franjas de cada restaurante suman sus pedidos creados (= SC1)", slotSums);
     ok &= check("H2: cada pedido en la franja de su t, recontado desde el log", slotCounts);
     ok &= check("H2: el pico es el máximo de la fila", peaks);
+
+    // C1: cada pedido creado se coloca en una celda (la de su restaurante); el filtro suma 1, así que lo suavizado
+    // conserva el total salvo lo que se derrama por los bordes; las celdas calientes van de mayor a menor, dentro de
+    // los límites; sin mapa, la sección no aparece.
+    const nlohmann::json& c1 = report.at("c1_demandHeatmap");
+    const nlohmann::json& hot = c1.at("hotspots");
+    const nlohmann::json& b = c1.at("bounds");
+    bool ordered = !hot.empty(), inside = true;
+    for (std::size_t k = 0; k < hot.size(); ++k) {
+        ordered &= k == 0 || hot[k - 1].at("value").get<double>() >= hot[k].at("value").get<double>();
+        inside &= hot[k].at("lat").get<double>() >= b.at("minLat").get<double>() - 1e-9 &&
+                  hot[k].at("lat").get<double>() <= b.at("maxLat").get<double>() + 1e-9 &&
+                  hot[k].at("lon").get<double>() >= b.at("minLon").get<double>() - 1e-9 &&
+                  hot[k].at("lon").get<double>() <= b.at("maxLon").get<double>() + 1e-9;
+    }
+    const double placed = c1.at("ordersPlaced").get<double>(), smoothed = c1.at("smoothedTotal").get<double>();
+    std::cout << "C1: " << placed << " pedidos en la grilla de " << c1.at("width") << " x " << c1.at("height")
+              << ", suavizado " << smoothed << ", celda más caliente " << hot[0].at("value") << " · calculado en "
+              << c1.at("computedOn") << "\n";
+    ok &= check("C1: un pedido por pedido creado en la grilla", placed == s.created);
+    ok &= check("C1: lo suavizado conserva el total (salvo bordes) y no lo supera",
+                smoothed <= placed * (1 + 1e-5) && smoothed >= 0.5 * placed);
+    ok &= check("C1: celdas calientes de mayor a menor y dentro del mapa", ordered && inside);
+    std::ostringstream noMap;
+    writeReport(replay, nullptr, nullptr, noMap);
+    ok &= check("C1: sin mapa, el reporte no la incluye",
+                nlohmann::json::parse(noMap.str()).count("c1_demandHeatmap") == 0);
 
     auto lineOfError = [](const std::string& text) {
         try {

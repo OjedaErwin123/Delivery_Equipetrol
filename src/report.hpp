@@ -33,5 +33,6 @@ struct LogReplay {
 // puede leer.
 LogReplay replayLog(std::istream& log);
 
-// Escribe el reporte en JSON. `gpu` puede ser nullptr (todo en la CPU).
-void writeReport(const LogReplay& replay, GpuOwner* gpu, std::ostream& out);
+// Escribe el reporte en JSON. `world` (el mapa: dónde está cada restaurante) puede ser nullptr: sin mapa se omiten
+// las partes que lo necesitan (C1). `gpu` puede ser nullptr (todo en la CPU).
+void writeReport(const LogReplay& replay, const World* world, GpuOwner* gpu, std::ostream& out);

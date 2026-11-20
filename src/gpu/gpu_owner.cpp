@@ -28,6 +28,7 @@ GpuOwner::~GpuOwner()
             _grouping.reset();
             _segmentStats.reset();
             _slotHistogram.reset();
+            _heatmap.reset();
             return true;
         })
         .get();
@@ -119,6 +120,21 @@ std::future<ThreadPool::Outcome<GpuOwner::SlotHistogramResult>> GpuOwner::slotHi
         }
         SlotHistogramResult result;
         result.counts = _slotHistogram->count(restaurantOf, createdMs, restaurants, interleaved, &result.timing);
+        return result;
+    });
+}
+
+std::future<ThreadPool::Outcome<GpuOwner::HeatmapResult>> GpuOwner::heatmap(Grid in, std::vector<float> filter,
+                                                                            bool tiled)
+{
+    return _thread.submit([this, in = std::move(in), filter = std::move(filter), tiled] {
+        if (!_heatmap || in.cells.size() > _heatmapCells) {
+            _heatmap.reset();
+            _heatmapCells = std::max<std::size_t>(in.cells.size(), 1);
+            _heatmap = std::make_unique<HeatmapGpu>(_heatmapCells);
+        }
+        HeatmapResult result;
+        result.grid = _heatmap->convolve(in, filter, tiled, &result.timing);
         return result;
     });
 }

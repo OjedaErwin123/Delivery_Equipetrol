@@ -150,7 +150,7 @@ int main(int argc, char** argv)
             return 1;
         }
         try {
-            writeReport(replayLog(replayed), params.gpu.get(), report);
+            writeReport(replayLog(replayed), params.world.get(), params.gpu.get(), report);
             std::cerr << "delivery_sim: reporte en '" << args.reportPath << "'\n";
         } catch (const std::exception& e) {
             std::cerr << "delivery_sim: el reporte falló: " << e.what() << "\n";

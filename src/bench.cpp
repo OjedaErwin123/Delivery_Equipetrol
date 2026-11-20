@@ -15,6 +15,7 @@
 
 #include "apsp.hpp"
 #include "grouping.hpp"
+#include "heatmap.hpp"
 #include "histogram.hpp"
 #include "nearest.hpp"
 #include "segment_stats.hpp"
@@ -483,6 +484,73 @@ void benchSlotHistogram(const SimParams& params, Csv& csv, std::ostream& progres
     }
 }
 
+// C1: el mapa de calor, convolución gaussiana de 13 x 13. Tamaño = celdas de la grilla: lados de 64 a 2048 (de 4096 a
+// 4,2 millones de celdas, tres órdenes de magnitud). La grilla de entrada es dispersa como la de la ciudad: una celda
+// de cada 50 con pedidos (de 1 a 20; semilla fija). Correcto = dentro de 1e-5 del mayor valor de la referencia
+// (flotantes; ver heatmap.hpp). Además de las cuatro versiones, gpu_kernel_basic: la convolución sin tiling (cada
+// hilo lee sus 169 vecinos de la memoria global).
+void benchHeatmap(const SimParams&, Csv& csv, std::ostream& progress, int repetitions, GpuOwner* gpu)
+{
+    static const char* kApp = "c1_heatmap";
+    const std::vector<float> filter = gaussianFilter();
+    std::map<std::size_t, std::unique_ptr<ThreadPool>> pools;
+    for (std::size_t t : threadCounts()) {
+        pools[t] = std::make_unique<ThreadPool>(t);
+    }
+#ifndef DELIVERY_USE_CUDA
+    (void)gpu;
+#endif
+    for (int side : {64, 128, 256, 512, 1024, 2048}) {
+        std::mt19937 random(static_cast<std::uint32_t>(23 + side));
+        Grid in;
+        in.width = in.height = side;
+        in.cells.assign(static_cast<std::size_t>(side) * side, 0.0f);
+        for (float& cell : in.cells) {
+            if (random() % 50 == 0) {
+                cell = static_cast<float>(1 + random() % 20);
+            }
+        }
+        const std::size_t n = in.cells.size();
+        const Grid reference = convolve(in, filter);
+        const float tolerance = 1e-5f * maxValue(reference);
+        auto close = [&](const Grid& g) { return maxDifference(g, reference) <= tolerance; };
+        auto runAll = [&](int rep) {
+            auto start = std::chrono::steady_clock::now();
+            bool ok = close(convolve(in, filter));
+            double took = msSince(start);
+            if (rep >= 0) {
+                csv.row(kApp, "cpu_1", 1, n, rep, took, ok);
+            }
+            for (auto& pool : pools) {
+                start = std::chrono::steady_clock::now();
+                const Grid out = convolveParallel(in, filter, *pool.second);
+                took = msSince(start);
+                if (rep >= 0) {
+                    csv.row(kApp, "cpu_threads", pool.first, n, rep, took, close(out));
+                }
+            }
+#ifdef DELIVERY_USE_CUDA
+            start = std::chrono::steady_clock::now();
+            const GpuOwner::HeatmapResult result = gpu->heatmap(in, filter, true).get().take();
+            took = msSince(start);
+            ok = close(result.grid);
+            const GpuOwner::HeatmapResult basic = gpu->heatmap(in, filter, false).get().take();
+            if (rep >= 0) {
+                csv.row(kApp, "gpu_kernel", 1, n, rep, result.timing.kernelMs, ok);
+                csv.row(kApp, "gpu_end_to_end", 1, n, rep, result.timing.endToEndMs, ok);
+                csv.row(kApp, "gpu_via_owner", 1, n, rep, took, ok);
+                csv.row(kApp, "gpu_kernel_basic", 1, n, rep, basic.timing.kernelMs, close(basic.grid));
+            }
+#endif
+        };
+        runAll(-1);
+        for (int rep = 0; rep < repetitions; ++rep) {
+            runAll(rep);
+        }
+        progress << kApp << " n=" << n << ":" << csv.medians() << "\n";
+    }
+}
+
 }  // namespace
 
 int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& progress, int repetitions,
@@ -496,6 +564,7 @@ int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& prog
         {"sc1_group", benchGrouping},
         {"r2_per_restaurant", benchSegmentStats},
         {"h2_hour_restaurant", benchSlotHistogram},
+        {"c1_heatmap", benchHeatmap},
     };
     if (!only.empty() &&
         std::none_of(apps.begin(), apps.end(), [&only](const auto& app) { return app.first == only; })) {
