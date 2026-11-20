@@ -27,6 +27,7 @@ GpuOwner::~GpuOwner()
             _histogram.reset();
             _grouping.reset();
             _segmentStats.reset();
+            _slotHistogram.reset();
             return true;
         })
         .get();
@@ -101,6 +102,23 @@ std::future<ThreadPool::Outcome<GpuOwner::SegmentStatsResult>> GpuOwner::segment
         }
         SegmentStatsResult result;
         result.stats = _segmentStats->stats(groups, deliveryMs, &result.timing);
+        return result;
+    });
+}
+
+std::future<ThreadPool::Outcome<GpuOwner::SlotHistogramResult>> GpuOwner::slotHistogram(
+    std::vector<std::uint32_t> restaurantOf, std::vector<std::uint32_t> createdMs, std::size_t restaurants,
+    bool interleaved)
+{
+    return _thread.submit([this, restaurantOf = std::move(restaurantOf), createdMs = std::move(createdMs), restaurants,
+                           interleaved] {
+        if (!_slotHistogram || restaurantOf.size() > _slotCapacity) {
+            _slotHistogram.reset();
+            _slotCapacity = std::max<std::size_t>(restaurantOf.size(), 1);
+            _slotHistogram = std::make_unique<SlotHistogramGpu>(_slotCapacity);
+        }
+        SlotHistogramResult result;
+        result.counts = _slotHistogram->count(restaurantOf, createdMs, restaurants, interleaved, &result.timing);
         return result;
     });
 }

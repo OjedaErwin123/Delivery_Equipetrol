@@ -1,5 +1,6 @@
 #include "report.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -8,6 +9,7 @@
 #include "grouping.hpp"
 #include "histogram.hpp"
 #include "segment_stats.hpp"
+#include "slot_histogram.hpp"
 #ifdef DELIVERY_USE_CUDA
 #include "gpu/gpu_owner.hpp"
 #endif
@@ -33,6 +35,7 @@ LogReplay replayLog(std::istream& log)
                 createdAt[order] = event.at("t").get<std::int64_t>();
                 createdIndex[order] = replay.orderDeliveryMs.size();
                 replay.orderDeliveryMs.push_back(kNotDelivered);
+                replay.orderCreatedMs.push_back(static_cast<std::uint32_t>(createdAt[order]));
                 const std::string& restaurant = event.at("restaurant").get_ref<const std::string&>();
                 const auto index =
                     restaurantIndex.emplace(restaurant, static_cast<std::uint32_t>(replay.restaurants.size()));
@@ -127,6 +130,45 @@ void writeReport(const LogReplay& replay, GpuOwner* gpu, std::ostream& out)
         };
     }
     report["r2_perRestaurant"] = {{"computedOn", statsWhere}, {"restaurants", statsPerName}};
+
+    // H2: los pedidos creados por (restaurante, franja de 10 minutos simulados): las horas pico de cada restaurante.
+    // Por restaurante, los conteos de las franjas hasta la última con pedidos, y su franja pico (la primera si hay
+    // empate). Más de kMaxSlotRestaurants (64) restaurantes: en la CPU.
+    SlotHistogram slots;
+    std::string slotsWhere = "CPU";
+#ifdef DELIVERY_USE_CUDA
+    if (gpu != nullptr && restaurants <= kMaxSlotRestaurants) {
+        slots = gpu->slotHistogram(replay.restaurantOf, replay.orderCreatedMs, restaurants, true).get().take().counts;
+        slotsWhere = "GPU (" + gpu->deviceName() + ")";
+    }
+#endif
+    if (slots.empty()) {
+        slots = ordersPerSlot(replay.restaurantOf, replay.orderCreatedMs, restaurants);
+    }
+    std::size_t lastSlot = 0;  // la última franja con algún pedido, de cualquier restaurante
+    for (std::size_t r = 0; r < restaurants; ++r) {
+        for (std::size_t s = 0; s < kSlots; ++s) {
+            if (slots[r * kSlots + s] > 0) {
+                lastSlot = std::max(lastSlot, s);
+            }
+        }
+    }
+    nlohmann::json slotsPerName = nlohmann::json::object();
+    for (std::size_t r = 0; r < restaurants; ++r) {
+        const auto row = slots.begin() + static_cast<std::ptrdiff_t>(r * kSlots);
+        const auto peak = std::max_element(row, row + static_cast<std::ptrdiff_t>(kSlots));
+        slotsPerName[replay.restaurants[r]] = {
+            {"counts", std::vector<std::uint64_t>(row, row + static_cast<std::ptrdiff_t>(lastSlot + 1))},
+            {"peakSlot", peak - row},
+            {"peakOrders", *peak},
+        };
+    }
+    report["h2_ordersPerSlot"] = {
+        {"computedOn", slotsWhere},
+        {"slotMinutes", kSlotMs / 60000},
+        {"slotsShown", lastSlot + 1},
+        {"restaurants", slotsPerName},
+    };
 
     nlohmann::json perRestaurant = nlohmann::json::object();
     for (std::size_t r = 0; r < restaurants; ++r) {

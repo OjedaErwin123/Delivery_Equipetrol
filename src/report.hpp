@@ -25,6 +25,8 @@ struct LogReplay {
     // R2: por pedido creado (mismo orden), su tiempo de entrega, o kNotDelivered (segment_stats.hpp) si no se
     // entregó (rechazado o pendiente).
     std::vector<std::uint32_t> orderDeliveryMs;
+    // H2: por pedido creado (mismo orden), el t de su orderCreated (ms simulados desde el inicio).
+    std::vector<std::uint32_t> orderCreatedMs;
 };
 
 // Lee un log de delivery_sim (un JSON por línea). Lanza std::runtime_error con el número de línea si una no se

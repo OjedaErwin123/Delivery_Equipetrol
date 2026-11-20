@@ -5,6 +5,7 @@
 //  - SC1: un restaurante por pedido creado; grupos contiguos, con solo pedidos de su restaurante, en orden de
 //    creación; conteos = los recontados;
 //  - R2: por restaurante, creados y entregas suman los del resumen; máximo y promedio = los del resumen;
+//  - H2: las franjas de cada restaurante suman sus pedidos; cada pedido en la franja de su t; el pico es el máximo;
 //  - una línea del log que no es JSON, o a la que le falta un campo, se informa con su número de línea.
 // Sale con 0 si todo está bien.
 #include <algorithm>
@@ -20,6 +21,7 @@
 #include "log_line.hpp"
 #include "report.hpp"
 #include "segment_stats.hpp"
+#include "slot_histogram.hpp"
 #include "simulation.hpp"
 
 int main(int argc, char** argv)
@@ -108,7 +110,36 @@ int main(int argc, char** argv)
     ok &= check("R2: el máximo entre restaurantes y el promedio de todo = los del resumen",
                 r2Max == s.maxDeliveryMs && r2Total / r2Delivered == s.avgDeliveryMs);
 
-    auto lineOfError =[](const std::string& text) {
+    // H2: la suma de las franjas de cada restaurante = sus pedidos creados (SC1); cada pedido cae en la franja de su
+    // t (recontado desde el log); el pico es el máximo de su fila.
+    const nlohmann::json& h2 = report.at("h2_ordersPerSlot");
+    bool slotSums = true, slotCounts = true, peaks = true;
+    for (std::size_t r = 0; r < replay.restaurants.size(); ++r) {
+        const nlohmann::json& entry = h2.at("restaurants").at(replay.restaurants[r]);
+        const auto counts = entry.at("counts").get<std::vector<std::uint64_t>>();
+        std::vector<std::uint64_t> recount(counts.size(), 0);
+        for (std::size_t i = 0; i < replay.restaurantOf.size(); ++i) {
+            if (replay.restaurantOf[i] == r) {
+                const std::size_t s = replay.orderCreatedMs[i] / kSlotMs;
+                slotCounts &= s < recount.size();
+                if (s < recount.size()) {
+                    ++recount[s];
+                }
+            }
+        }
+        slotCounts &= recount == counts;
+        slotSums &= std::accumulate(counts.begin(), counts.end(), std::uint64_t{0}) ==
+                    sc1.at("restaurants").at(replay.restaurants[r]).at("orders").get<std::uint64_t>();
+        peaks &= entry.at("peakOrders").get<std::uint64_t>() == *std::max_element(counts.begin(), counts.end()) &&
+                 counts[entry.at("peakSlot").get<std::size_t>()] == entry.at("peakOrders").get<std::uint64_t>();
+    }
+    std::cout << "H2: " << h2.at("slotsShown") << " franjas de " << h2.at("slotMinutes") << " min · calculado en "
+              << h2.at("computedOn") << "\n";
+    ok &= check("H2: las franjas de cada restaurante suman sus pedidos creados (= SC1)", slotSums);
+    ok &= check("H2: cada pedido en la franja de su t, recontado desde el log", slotCounts);
+    ok &= check("H2: el pico es el máximo de la fila", peaks);
+
+    auto lineOfError = [](const std::string& text) {
         try {
             std::istringstream bad(text);
             replayLog(bad);

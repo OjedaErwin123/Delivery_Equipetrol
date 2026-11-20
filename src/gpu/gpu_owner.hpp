@@ -11,6 +11,7 @@
 #include "gpu/histogram_gpu.hpp"
 #include "gpu/nearest_gpu.hpp"
 #include "gpu/segment_stats_gpu.hpp"
+#include "gpu/slot_histogram_gpu.hpp"
 #include "thread_pool.hpp"
 
 // EC2: el hilo dueño de la GPU. Toda llamada a CUDA (crear el contexto, reservar memoria, copiar, lanzar
@@ -72,6 +73,17 @@ public:
     // grupos de SC1. La memoria se reserva en el primer pedido o si llegan más pedidos o restaurantes.
     std::future<ThreadPool::Outcome<SegmentStatsResult>> segmentStats(Grouping groups, std::vector<std::uint32_t> deliveryMs);
 
+    struct SlotHistogramResult {
+        SlotHistogram counts;
+        SlotHistogramGpu::Timing timing;
+    };
+    // H2: encola el histograma 2D (restaurante, franja de 10 minutos) de los pedidos creados, con el recorrido
+    // intercalado (coalescido, `interleaved`) o contiguo (para comparar). Hasta kMaxSlotRestaurants restaurantes
+    // (si son más, el future trae la excepción). La memoria se reserva en el primer pedido o si llegan más pedidos.
+    std::future<ThreadPool::Outcome<SlotHistogramResult>> slotHistogram(std::vector<std::uint32_t> restaurantOf,
+                                                                        std::vector<std::uint32_t> createdMs,
+                                                                        std::size_t restaurants, bool interleaved);
+
     // El nombre del dispositivo (leído en el hilo dueño al crear el objeto).
     const std::string& deviceName() const { return _deviceName; }
 
@@ -85,6 +97,8 @@ private:
     std::size_t _groupingCapacity = 0;         // ídem
     std::unique_ptr<SegmentStatsGpu> _segmentStats;  // ídem
     std::size_t _segmentCapacity = 0, _segmentRestaurants = 0;  // ídem
+    std::unique_ptr<SlotHistogramGpu> _slotHistogram;           // ídem
+    std::size_t _slotCapacity = 0;                              // ídem
     std::string _deviceName;
     ThreadPool _thread{1};                  // se destruye primero: join antes de que _nearest deje de existir
 };
