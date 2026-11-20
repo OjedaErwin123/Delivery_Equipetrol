@@ -31,6 +31,7 @@ GpuOwner::~GpuOwner()
             _heatmap.reset();
             _coverage.reset();
             _diffusion.reset();
+            _phases.reset();
             return true;
         })
         .get();
@@ -165,6 +166,21 @@ std::future<ThreadPool::Outcome<GpuOwner::DiffusionResult>> GpuOwner::diffusion(
         }
         DiffusionResult result;
         result.grid = _diffusion->diffuse(start, steps, coarsened, &result.timing);
+        return result;
+    });
+}
+
+std::future<ThreadPool::Outcome<GpuOwner::PhasesResult>> GpuOwner::phases(std::vector<OrderRecord> records, bool aos)
+{
+    return _thread.submit([this, records = std::move(records), aos] {
+        if (!_phases || records.size() > _phasesCapacity) {
+            _phases.reset();
+            _phasesCapacity = std::max<std::size_t>(records.size(), 1);
+            _phases = std::make_unique<PhasesGpu>(_phasesCapacity);
+        }
+        PhasesResult result;
+        result.totals = aos ? _phases->fromRecords(records, &result.timing)
+                            : _phases->fromColumns(columnsOf(records), &result.timing);
         return result;
     });
 }

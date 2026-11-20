@@ -10,6 +10,7 @@
 //    dentro del mapa; sin mapa no aparece;
 //  - S1: el campo de cobertura convergió; toda celda con calles llega a un restaurante; percentiles en orden;
 //  - S2: parte de la demanda de C1; queda a lo sumo kKeep^pasos del total; el pico baja;
+//  - P1: entregados = los del resumen; las tres fases suman los tiempos de entrega;
 //  - una línea del log que no es JSON, o a la que le falta un campo, se informa con su número de línea.
 // Sale con 0 si todo está bien.
 #include <algorithm>
@@ -206,6 +207,17 @@ int main(int argc, char** argv)
                 endTotal <= startTotal * decay * (1 + 1e-4) && endTotal > 0);
     ok &= check("S2: el pico baja y las celdas calientes van de mayor a menor",
                 s2.at("peakEnd").get<double>() < s2.at("peakStart").get<double>() && ordered2);
+
+    // P1: los entregados = los del resumen; esperar + recoger + llevar = el tiempo de entrega de cada pedido, así que
+    // las tres sumas juntas = la suma de los tiempos de entrega (recalculada desde el log, sin la GPU).
+    const nlohmann::json& p1 = report.at("p1_phases");
+    const std::uint64_t phaseSum = p1.at("totalMs").at("wait").get<std::uint64_t>() +
+                                   p1.at("totalMs").at("pickup").get<std::uint64_t>() +
+                                   p1.at("totalMs").at("ride").get<std::uint64_t>();
+    std::cout << "P1: promedio esperar " << p1.at("avgMs").at("wait") << " ms, recoger " << p1.at("avgMs").at("pickup")
+              << " ms, llevar " << p1.at("avgMs").at("ride") << " ms · calculado en " << p1.at("computedOn") << "\n";
+    ok &= check("P1: entregados = los del resumen", p1.at("delivered").get<int>() == s.delivered);
+    ok &= check("P1: esperar + recoger + llevar = la suma de los tiempos de entrega", phaseSum == sum);
 
     auto lineOfError = [](const std::string& text) {
         try {

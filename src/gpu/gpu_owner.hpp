@@ -13,6 +13,7 @@
 #include "gpu/heatmap_gpu.hpp"
 #include "gpu/histogram_gpu.hpp"
 #include "gpu/nearest_gpu.hpp"
+#include "gpu/phases_gpu.hpp"
 #include "gpu/segment_stats_gpu.hpp"
 #include "gpu/slot_histogram_gpu.hpp"
 #include "thread_pool.hpp"
@@ -114,6 +115,14 @@ public:
     // si llega una grilla más grande.
     std::future<ThreadPool::Outcome<DiffusionResult>> diffusion(Grid start, int steps, bool coarsened);
 
+    struct PhasesResult {
+        PhaseTotals totals;
+        PhasesGpu::Timing timing;
+    };
+    // P1: encola las sumas de las fases de los pedidos, leyendo los registros tal cual (AoS, `aos`) o un arreglo por
+    // campo (SoA: las columnas se arman en el hilo dueño antes de copiarlas; eso no entra en el tiempo de la GPU).
+    std::future<ThreadPool::Outcome<PhasesResult>> phases(std::vector<OrderRecord> records, bool aos);
+
     // El nombre del dispositivo (leído en el hilo dueño al crear el objeto).
     const std::string& deviceName() const { return _deviceName; }
 
@@ -135,6 +144,8 @@ private:
     std::size_t _coverageCells = 0;                             // ídem
     std::unique_ptr<DiffusionGpu> _diffusion;                   // ídem
     std::size_t _diffusionCells = 0;                            // ídem
+    std::unique_ptr<PhasesGpu> _phases;                         // ídem
+    std::size_t _phasesCapacity = 0;                            // ídem
     std::string _deviceName;
     ThreadPool _thread{1};                  // se destruye primero: join antes de que _nearest deje de existir
 };

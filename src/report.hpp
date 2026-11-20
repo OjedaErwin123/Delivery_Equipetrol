@@ -27,6 +27,9 @@ struct LogReplay {
     std::vector<std::uint32_t> orderDeliveryMs;
     // H2: por pedido creado (mismo orden), el t de su orderCreated (ms simulados desde el inicio).
     std::vector<std::uint32_t> orderCreatedMs;
+    // P1: por pedido creado (mismo orden), el t de su primer orderAssigned y de su primer orderPickedUp, o kNotYet
+    // (phases.hpp) si no llegó a ese estado; y cuántas veces se traspasó (orderReassigned).
+    std::vector<std::uint32_t> orderAssignedMs, orderPickedUpMs, orderReassigned;
 };
 
 // Lee un log de delivery_sim (un JSON por línea). Lanza std::runtime_error con el número de línea si una no se

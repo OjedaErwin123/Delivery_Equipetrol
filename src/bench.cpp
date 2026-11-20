@@ -20,6 +20,7 @@
 #include "heatmap.hpp"
 #include "histogram.hpp"
 #include "nearest.hpp"
+#include "phases.hpp"
 #include "segment_stats.hpp"
 #include "slot_histogram.hpp"
 #include "thread_pool.hpp"
@@ -682,6 +683,71 @@ void benchDiffusion(const SimParams&, Csv& csv, std::ostream& progress, int repe
     }
 }
 
+// P1: las fases de los pedidos (esperar, recoger, llevar), AoS contra SoA. Tamaño = pedidos, de 10^3 a 10^7.
+// Registros sintéticos con tiempos parecidos a los de la ciudad (esperar hasta 10 min, recoger de 1 a 15, llevar de 2
+// a 30; uno de cada diez sin entregar; semilla fija). cpu_1 recorre los registros (AoS) como los arma el reporte;
+// cpu_threads recorre las columnas (SoA), armadas una vez fuera de la medición. En la GPU, la versión que se usa lee
+// las columnas (SoA, coalescido) y gpu_kernel_aos lee los registros de 32 bytes (no coalescido).
+void benchPhases(const SimParams&, Csv& csv, std::ostream& progress, int repetitions, GpuOwner* gpu)
+{
+    static const char* kApp = "p1_phases";
+    std::map<std::size_t, std::unique_ptr<ThreadPool>> pools;
+    for (std::size_t t : threadCounts()) {
+        pools[t] = std::make_unique<ThreadPool>(t);
+    }
+#ifndef DELIVERY_USE_CUDA
+    (void)gpu;
+#endif
+    for (std::size_t n : {std::size_t{1000}, std::size_t{10000}, std::size_t{100000}, std::size_t{1000000},
+                          std::size_t{10000000}}) {
+        std::mt19937 random(static_cast<std::uint32_t>(37 + n));
+        std::vector<OrderRecord> records(n);
+        for (OrderRecord& r : records) {
+            r.createdMs = random() % 3600000;
+            r.assignedMs = r.createdMs + random() % 600000;
+            r.pickedUpMs = r.assignedMs + 60000 + random() % 840000;
+            r.deliveredMs = random() % 10 == 0 ? kNotYet : r.pickedUpMs + 120000 + random() % 1680000;
+            r.restaurant = random() % 37;
+        }
+        const OrderColumns columns = columnsOf(records);
+        const PhaseTotals reference = phaseTotals(records);
+        auto runAll = [&](int rep) {
+            auto start = std::chrono::steady_clock::now();
+            bool ok = phaseTotals(records) == reference;
+            double took = msSince(start);
+            if (rep >= 0) {
+                csv.row(kApp, "cpu_1", 1, n, rep, took, ok);
+            }
+            for (auto& pool : pools) {
+                start = std::chrono::steady_clock::now();
+                ok = phaseTotalsParallel(columns, *pool.second) == reference;
+                took = msSince(start);
+                if (rep >= 0) {
+                    csv.row(kApp, "cpu_threads", pool.first, n, rep, took, ok);
+                }
+            }
+#ifdef DELIVERY_USE_CUDA
+            start = std::chrono::steady_clock::now();
+            const GpuOwner::PhasesResult result = gpu->phases(records, false).get().take();
+            took = msSince(start);
+            ok = result.totals == reference;
+            const GpuOwner::PhasesResult aos = gpu->phases(records, true).get().take();
+            if (rep >= 0) {
+                csv.row(kApp, "gpu_kernel", 1, n, rep, result.timing.kernelMs, ok);
+                csv.row(kApp, "gpu_end_to_end", 1, n, rep, result.timing.endToEndMs, ok);
+                csv.row(kApp, "gpu_via_owner", 1, n, rep, took, ok);
+                csv.row(kApp, "gpu_kernel_aos", 1, n, rep, aos.timing.kernelMs, aos.totals == reference);
+            }
+#endif
+        };
+        runAll(-1);
+        for (int rep = 0; rep < repetitions; ++rep) {
+            runAll(rep);
+        }
+        progress << kApp << " n=" << n << ":" << csv.medians() << "\n";
+    }
+}
+
 }  // namespace
 
 int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& progress, int repetitions,
@@ -698,6 +764,7 @@ int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& prog
         {"c1_heatmap", benchHeatmap},
         {"s1_coverage", benchCoverage},
         {"s2_diffusion", benchDiffusion},
+        {"p1_phases", benchPhases},
     };
     if (!only.empty() &&
         std::none_of(apps.begin(), apps.end(), [&only](const auto& app) { return app.first == only; })) {

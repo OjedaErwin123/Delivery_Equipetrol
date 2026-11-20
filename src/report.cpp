@@ -12,6 +12,7 @@
 #include "grouping.hpp"
 #include "heatmap.hpp"
 #include "histogram.hpp"
+#include "phases.hpp"
 #include "segment_stats.hpp"
 #include "slot_histogram.hpp"
 #ifdef DELIVERY_USE_CUDA
@@ -40,6 +41,9 @@ LogReplay replayLog(std::istream& log)
                 createdIndex[order] = replay.orderDeliveryMs.size();
                 replay.orderDeliveryMs.push_back(kNotDelivered);
                 replay.orderCreatedMs.push_back(static_cast<std::uint32_t>(createdAt[order]));
+                replay.orderAssignedMs.push_back(kNotYet);
+                replay.orderPickedUpMs.push_back(kNotYet);
+                replay.orderReassigned.push_back(0);
                 const std::string& restaurant = event.at("restaurant").get_ref<const std::string&>();
                 const auto index =
                     restaurantIndex.emplace(restaurant, static_cast<std::uint32_t>(replay.restaurants.size()));
@@ -53,6 +57,15 @@ LogReplay replayLog(std::istream& log)
                 replay.deliveryMs.push_back(static_cast<std::uint32_t>(took));
                 replay.orderDeliveryMs[createdIndex.at(order)] = static_cast<std::uint32_t>(took);
                 ++replay.delivered;
+            } else if (kind == "orderAssigned" || kind == "orderPickedUp") {
+                // La primera vez (después de un traspaso, el pedido ya estaba asignado o recogido).
+                std::uint32_t& at = (kind == "orderAssigned" ? replay.orderAssignedMs : replay.orderPickedUpMs)
+                    [createdIndex.at(event.at("order").get<std::string>())];
+                if (at == kNotYet) {
+                    at = static_cast<std::uint32_t>(event.at("t").get<std::int64_t>());
+                }
+            } else if (kind == "orderReassigned") {
+                ++replay.orderReassigned[createdIndex.at(event.at("order").get<std::string>())];
             }
         } catch (const std::exception& error) {
             throw std::runtime_error("log, línea " + std::to_string(number) + ": " + error.what());
@@ -423,6 +436,40 @@ void writeReport(const LogReplay& replay, const World* world, GpuOwner* gpu, std
         {"slotMinutes", kSlotMs / 60000},
         {"slotsShown", lastSlot + 1},
         {"restaurants", slotsPerName},
+    };
+
+    // P1: en qué se va el tiempo de un pedido entregado. Los registros (AoS, 32 bytes) se arman desde el log; la GPU
+    // los lee como columnas (SoA, coalescido). Promedios de esperar (creado -> asignado), recoger (asignado ->
+    // recogido: cocina, fila y entrega en el puesto) y llevar (recogido -> entregado).
+    std::vector<OrderRecord> records(replay.restaurantOf.size());
+    for (std::size_t i = 0; i < records.size(); ++i) {
+        OrderRecord& r = records[i];
+        r.createdMs = replay.orderCreatedMs[i];
+        r.assignedMs = replay.orderAssignedMs[i];
+        r.pickedUpMs = replay.orderPickedUpMs[i];
+        r.deliveredMs = replay.orderDeliveryMs[i] == kNotDelivered ? kNotYet : r.createdMs + replay.orderDeliveryMs[i];
+        r.restaurant = replay.restaurantOf[i];
+        r.reassigned = replay.orderReassigned[i];
+    }
+    PhaseTotals phases;
+    std::string phasesWhere = "CPU";
+    bool phasesDone = false;
+#ifdef DELIVERY_USE_CUDA
+    if (gpu != nullptr) {
+        phases = gpu->phases(records, false).get().take().totals;
+        phasesWhere = "GPU (" + gpu->deviceName() + ")";
+        phasesDone = true;
+    }
+#endif
+    if (!phasesDone) {
+        phases = phaseTotals(records);
+    }
+    auto average = [&phases](std::uint64_t sum) { return phases.delivered == 0 ? 0 : sum / phases.delivered; };
+    report["p1_phases"] = {
+        {"computedOn", phasesWhere},
+        {"delivered", phases.delivered},
+        {"totalMs", {{"wait", phases.waitMs}, {"pickup", phases.pickupMs}, {"ride", phases.rideMs}}},
+        {"avgMs", {{"wait", average(phases.waitMs)}, {"pickup", average(phases.pickupMs)}, {"ride", average(phases.rideMs)}}},
     };
 
     if (world != nullptr) {
