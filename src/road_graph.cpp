@@ -99,6 +99,17 @@ bool RoadGraph::reachableFromRestaurant(std::size_t restaurant, std::size_t node
     return _fromRestaurant[restaurant][node] != kInfinity;
 }
 
+std::vector<RoadGraph::DirectedStreet> RoadGraph::directedStreets() const
+{
+    std::vector<DirectedStreet> streets;
+    for (std::size_t from = 0; from < _out.size(); ++from) {
+        for (const Edge& edge : _out[from]) {
+            streets.push_back({from, edge.to, edge.meters});
+        }
+    }
+    return streets;
+}
+
 // Dijkstra con cola de prioridad y "borrado perezoso": un nodo puede entrar varias veces a
 // la cola; al sacarlo se ignora si ya se conoce una distancia menor. Los empates se resuelven
 // por índice de nodo (la cola ordena pares (metros, nodo)), así el camino es siempre el mismo.

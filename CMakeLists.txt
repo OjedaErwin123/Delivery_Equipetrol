@@ -121,13 +121,14 @@ add_executable(delivery_sim
   src/order_book.cpp
   src/event_log.cpp
   src/nearest.cpp
+  src/apsp.cpp
   src/bench.cpp
 )
 delivery_target_options(delivery_sim)
 target_link_libraries(delivery_sim PRIVATE nlohmann_json)
 if(USE_CUDA)
   # EC2: el hilo dueño de la GPU y los kernels. Sin USE_CUDA, delivery_sim no tiene nada de GPU (ni la emulación).
-  target_sources(delivery_sim PRIVATE src/gpu/nearest_gpu.cu src/gpu/gpu_owner.cpp)
+  target_sources(delivery_sim PRIVATE src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu src/gpu/gpu_owner.cpp)
   target_compile_definitions(delivery_sim PRIVATE DELIVERY_USE_CUDA)
 endif()
 if(DELIVERY_WINDOW)
@@ -311,7 +312,11 @@ function(delivery_cuda_sources)
   endif()
 endfunction()
 
-delivery_cuda_sources(tests/gpu_smoke_check.cu tests/gpu_nearest_check.cu src/gpu/nearest_gpu.cu)
+delivery_cuda_sources(tests/gpu_smoke_check.cu tests/gpu_nearest_check.cu tests/gpu_apsp_check.cu
+                      src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu)
+# Lo que usa el hilo dueño de la GPU (gpu_owner.cpp): todas las aplicaciones.
+set(DELIVERY_GPU_SOURCES src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu src/gpu/gpu_owner.cpp src/nearest.cpp
+    src/apsp.cpp src/road_graph.cpp src/thread_pool.cpp)
 add_executable(gpu_smoke_check tests/gpu_smoke_check.cu)
 delivery_target_options(gpu_smoke_check)
 add_test(NAME gpu_smoke_check COMMAND gpu_smoke_check)
@@ -321,7 +326,17 @@ add_executable(nearest_check tests/nearest_check.cpp src/nearest.cpp src/road_gr
 delivery_target_options(nearest_check)
 add_test(NAME nearest_check COMMAND nearest_check)
 
-add_executable(gpu_nearest_check tests/gpu_nearest_check.cu src/gpu/nearest_gpu.cu src/gpu/gpu_owner.cpp
-               src/nearest.cpp src/road_graph.cpp src/thread_pool.cpp)
+add_executable(gpu_nearest_check tests/gpu_nearest_check.cu ${DELIVERY_GPU_SOURCES})
 delivery_target_options(gpu_nearest_check)
 add_test(NAME gpu_nearest_check COMMAND gpu_nearest_check)
+
+# T1: la tabla de todos contra todos (Floyd–Warshall por bloques). Versiones de CPU y prueba de igualdad de la GPU.
+add_executable(apsp_check tests/apsp_check.cpp src/apsp.cpp src/road_graph.cpp src/thread_pool.cpp src/config.cpp)
+delivery_target_options(apsp_check)
+target_link_libraries(apsp_check PRIVATE nlohmann_json)
+add_test(NAME apsp_check COMMAND apsp_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
+
+add_executable(gpu_apsp_check tests/gpu_apsp_check.cu ${DELIVERY_GPU_SOURCES} src/config.cpp)
+delivery_target_options(gpu_apsp_check)
+target_link_libraries(gpu_apsp_check PRIVATE nlohmann_json)
+add_test(NAME gpu_apsp_check COMMAND gpu_apsp_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)

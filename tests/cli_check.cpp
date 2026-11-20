@@ -46,6 +46,8 @@ int main(int argc, char** argv)
     const CliArgs once = parseArgs({"c.json", "--bench-once", "--log", "x.log", "--headless"});
     ok &= check("--bench-once sin --bench: mide sin CSV; las banderas en cualquier orden",
                 once.bench() && once.benchOnce && once.benchPath.empty() && once.headless && once.logPath == "x.log");
+    const CliArgs one = parseArgs({"c.json", "--bench-once", "--bench-app", "t1_apsp"});
+    ok &= check("--bench-once --bench-app t1_apsp", one.bench() && one.benchApp == "t1_apsp");
 
     // 2. Argumentos inválidos: el enunciado solo define la configuración y --log.
     ok &= check("sin argumentos", rejects({}, "falta el archivo de configuración"));
@@ -57,6 +59,8 @@ int main(int argc, char** argv)
     ok &= check("argumento de más", rejects({"c.json", "otro.json"}, "argumento desconocido 'otro.json'"));
     ok &= check("--bench sin ruta", rejects({"c.json", "--bench"}, "--bench necesita"));
     ok &= check("--headless dos veces", rejects({"c.json", "--headless", "--headless"}, "más de una vez"));
+    ok &= check("--bench-app sin --bench", rejects({"c.json", "--bench-app", "t1_apsp"}, "solo sirve con"));
+    ok &= check("--bench-app sin nombre", rejects({"c.json", "--bench-once", "--bench-app"}, "--bench-app necesita"));
     ok &= check("--bench-once con valor de más", rejects({"c.json", "--bench-once", "x"}, "argumento desconocido 'x'"));
 
     // 3. Los parámetros que salen de la configuración real.

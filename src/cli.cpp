@@ -21,7 +21,8 @@ CliArgs parseArgs(const std::vector<std::string>& args)
     std::set<std::string> seen;
     for (std::size_t i = 1; i < args.size(); ++i) {
         const std::string& flag = args[i];
-        if (flag != "--log" && flag != "--headless" && flag != "--bench" && flag != "--bench-once") {
+        if (flag != "--log" && flag != "--headless" && flag != "--bench" && flag != "--bench-once" &&
+            flag != "--bench-app") {
             throw CliError("argumento desconocido '" + flag + "'");
         }
         if (!seen.insert(flag).second) {
@@ -31,18 +32,22 @@ CliArgs parseArgs(const std::vector<std::string>& args)
             result.headless = true;
         } else if (flag == "--bench-once") {
             result.benchOnce = true;
-        } else {  // --log y --bench llevan una ruta
+        } else {  // --log, --bench y --bench-app llevan un valor
             if (i + 1 == args.size() || isFlag(args[i + 1])) {
-                throw CliError(flag == "--log" ? "--log necesita la ruta del archivo de log"
-                                               : "--bench necesita la ruta del archivo CSV");
+                throw CliError(flag == "--log"     ? "--log necesita la ruta del archivo de log"
+                               : flag == "--bench" ? "--bench necesita la ruta del archivo CSV"
+                                                   : "--bench-app necesita el nombre de una aplicación");
             }
-            (flag == "--log" ? result.logPath : result.benchPath) = args[++i];
+            (flag == "--log" ? result.logPath : flag == "--bench" ? result.benchPath : result.benchApp) = args[++i];
         }
+    }
+    if (!result.benchApp.empty() && !result.bench()) {
+        throw CliError("--bench-app solo sirve con --bench o --bench-once");
     }
     return result;
 }
 
 const char* usage()
 {
-    return "uso: delivery_sim <config.json> [--log <path>] [--headless] [--bench <csv>] [--bench-once]\n";
+    return "uso: delivery_sim <config.json> [--log <path>] [--headless] [--bench <csv>] [--bench-once] [--bench-app <nombre>]\n";
 }

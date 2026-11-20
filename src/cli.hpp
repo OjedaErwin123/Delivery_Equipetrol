@@ -5,19 +5,21 @@
 #include <vector>
 
 // Argumentos de línea de comandos (sección 5 del enunciado, más los modos de EC2):
-//   delivery_sim <config.json> [--log <path>] [--headless] [--bench <csv>] [--bench-once]
+//   delivery_sim <config.json> [--log <path>] [--headless] [--bench <csv>] [--bench-once] [--bench-app <nombre>]
 // El primero es el archivo de configuración; después, en cualquier orden y a lo sumo una vez cada una:
 //   --log <path>   la ruta del log;
 //   --headless     sin ventana (para una máquina sin pantalla, como Google Colab); la simulación no cambia;
 //   --bench <csv>  no simula: mide las aplicaciones de GPU de EC2 (bench.hpp) y escribe el CSV;
 //   --bench-once   como --bench pero con una sola repetición por tamaño (para perfilar con ncu); sin --bench
-//                  no escribe CSV.
+//                  no escribe CSV;
+//   --bench-app <nombre>  con --bench o --bench-once, mide solo esa aplicación (p. ej. t1_apsp).
 struct CliArgs {
     std::string configPath;
     std::string logPath = "events.log";
     bool headless = false;
     std::string benchPath;  // vacía = sin CSV
     bool benchOnce = false;
+    std::string benchApp;   // vacía = todas
     bool bench() const { return !benchPath.empty() || benchOnce; }
 };
 

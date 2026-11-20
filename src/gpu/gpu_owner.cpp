@@ -22,6 +22,7 @@ GpuOwner::~GpuOwner()
     _thread
         .submit([this] {
             _nearest.reset();
+            _apsp.reset();
             return true;
         })
         .get();
@@ -33,6 +34,21 @@ std::future<ThreadPool::Outcome<GpuOwner::Nearest>> GpuOwner::nearest(std::vecto
     return _thread.submit([this, at = std::move(at), shop, limit] {
         Nearest result;
         result.superset = _nearest->superset(at, shop, limit, &result.timing);
+        return result;
+    });
+}
+
+std::future<ThreadPool::Outcome<GpuOwner::Apsp>> GpuOwner::apsp(DistanceTable initial)
+{
+    return _thread.submit([this, table = std::move(initial)]() mutable {
+        if (!_apsp || table.stride > _apspStride) {
+            _apsp.reset();  // primero liberar: la tabla vieja y la nueva no tienen que entrar juntas
+            _apsp = std::make_unique<ApspGpu>(table.stride);
+            _apspStride = table.stride;
+        }
+        Apsp result;
+        _apsp->solve(table, &result.timing);
+        result.table = std::move(table);
         return result;
     });
 }

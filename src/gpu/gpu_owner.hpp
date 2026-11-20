@@ -5,6 +5,8 @@
 #include <memory>
 #include <vector>
 
+#include "apsp.hpp"
+#include "gpu/apsp_gpu.hpp"
 #include "gpu/nearest_gpu.hpp"
 #include "thread_pool.hpp"
 
@@ -34,11 +36,21 @@ public:
     // quien lo pidió dejó de esperar.
     std::future<ThreadPool::Outcome<Nearest>> nearest(std::vector<Coordinates> at, Coordinates shop, std::size_t limit);
 
+    struct Apsp {
+        DistanceTable table;  // resuelta
+        ApspGpu::Timing timing;
+    };
+    // T1: encola Floyd–Warshall por bloques sobre `initial` (la tabla viaja por valor, ida y vuelta). La memoria
+    // de la GPU se reserva en el primer pedido (o si llega una tabla más grande) y la tabla queda en la GPU.
+    std::future<ThreadPool::Outcome<Apsp>> apsp(DistanceTable initial);
+
     // El nombre del dispositivo (leído en el hilo dueño al crear el objeto).
     const std::string& deviceName() const { return _deviceName; }
 
 private:
     std::unique_ptr<NearestGpu> _nearest;  // solo lo toca el hilo de _thread
+    std::unique_ptr<ApspGpu> _apsp;        // ídem
+    std::size_t _apspStride = 0;           // ídem: el tamaño reservado para _apsp
     std::string _deviceName;
     ThreadPool _thread{1};                  // se destruye primero: join antes de que _nearest deje de existir
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ostream>
+#include <string>
 
 #include "simulation.hpp"
 
@@ -20,4 +21,7 @@
 // y en `progress` una línea por tamaño con las medianas. Devuelve 0 si todas las corridas dieron lo correcto.
 constexpr int kBenchRepetitions = 15;  // el documento pide al menos 10 corridas medidas
 
-int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& progress, int repetitions);
+// `only`: el nombre de una aplicación (r1_nearest, t1_apsp) para medir solo esa; vacío = todas. Un nombre que no
+// existe lanza std::invalid_argument.
+int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& progress, int repetitions,
+                  const std::string& only = "");

@@ -1,4 +1,4 @@
-// delivery_sim <config.json> [--log <path>] [--headless] [--bench <csv>] [--bench-once]
+// delivery_sim <config.json> [--log <path>] [--headless] [--bench <csv>] [--bench-once] [--bench-app <nombre>]
 //
 // Con --bench o --bench-once no simula: mide las aplicaciones de GPU de EC2 (bench.hpp) y termina. Con
 // --headless no abre la ventana (la simulación es la misma).
@@ -18,6 +18,7 @@
 #include "cli.hpp"
 #include "config.hpp"
 #ifdef DELIVERY_USE_CUDA
+#include "apsp.hpp"
 #include "gpu/gpu_owner.hpp"
 #endif
 #include "simulation.hpp"
@@ -53,7 +54,7 @@ int main(int argc, char** argv)
         }
         std::ostream& csv = args.benchPath.empty() ? discard : file;
         try {
-            return runBenchmarks(params, csv, std::cerr, args.benchOnce ? 1 : kBenchRepetitions);
+            return runBenchmarks(params, csv, std::cerr, args.benchOnce ? 1 : kBenchRepetitions, args.benchApp);
         } catch (const std::exception& e) {  // p. ej. la GPU no se pudo preparar
             std::cerr << "delivery_sim: el bench falló: " << e.what() << "\n";
             return 1;
@@ -84,6 +85,31 @@ int main(int argc, char** argv)
         std::cerr << "delivery_sim: GPU: " << params.gpu->deviceName() << "\n";
     } catch (const std::exception& e) {
         std::cerr << "delivery_sim: sin GPU (" << e.what() << "); el despacho sigue en la CPU\n";
+    }
+    // EC2, T1: la alcanzabilidad de cada destino desde cada restaurante (unreachable), desde la tabla de todos
+    // contra todos que calcula la GPU (Floyd–Warshall por bloques). Es la misma que la de los Dijkstra
+    // (apsp_check); si la GPU falla, queda esa.
+    if (params.gpu) {
+        try {
+            const RoadGraph& graph = params.world->graph;
+            const auto start = std::chrono::steady_clock::now();
+            const GpuOwner::Apsp solved = params.gpu->apsp(initialTable(graph)).get().take();
+            std::vector<std::size_t> restaurantNodes, destinationNodes;
+            for (const std::string& r : params.restaurants) {
+                restaurantNodes.push_back(params.world->restaurantNode.at(r));
+            }
+            for (const std::string& d : params.destinations) {
+                destinationNodes.push_back(*graph.nodeIndex(d));
+            }
+            params.reachable = reachabilityFrom(solved.table, restaurantNodes, destinationNodes);
+            std::cerr << "delivery_sim: tabla de todos contra todos (" << graph.nodeCount() << " nodos) en la GPU: "
+                      << solved.timing.kernelMs << " ms de kernels, "
+                      << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count()
+                      << " ms en total\n";
+        } catch (const std::exception& e) {
+            std::cerr << "delivery_sim: la tabla de todos contra todos falló en la GPU (" << e.what()
+                      << "); la alcanzabilidad queda la de los Dijkstra\n";
+        }
     }
 #endif
     FrameHook onFrame;
