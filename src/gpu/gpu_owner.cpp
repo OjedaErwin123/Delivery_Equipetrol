@@ -1,5 +1,6 @@
 #include "gpu/gpu_owner.hpp"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
@@ -23,6 +24,7 @@ GpuOwner::~GpuOwner()
         .submit([this] {
             _nearest.reset();
             _apsp.reset();
+            _histogram.reset();
             return true;
         })
         .get();
@@ -49,6 +51,21 @@ std::future<ThreadPool::Outcome<GpuOwner::Apsp>> GpuOwner::apsp(DistanceTable in
         Apsp result;
         _apsp->solve(table, &result.timing);
         result.table = std::move(table);
+        return result;
+    });
+}
+
+std::future<ThreadPool::Outcome<GpuOwner::HistogramResult>> GpuOwner::histogram(std::vector<std::uint32_t> ms,
+                                                                                bool privatize)
+{
+    return _thread.submit([this, ms = std::move(ms), privatize] {
+        if (!_histogram || ms.size() > _histogramCapacity) {
+            _histogram.reset();
+            _histogramCapacity = std::max<std::size_t>(ms.size(), 1);
+            _histogram = std::make_unique<HistogramGpu>(_histogramCapacity);
+        }
+        HistogramResult result;
+        result.counts = privatize ? _histogram->privatized(ms, &result.timing) : _histogram->globalAtomics(ms, &result.timing);
         return result;
     });
 }

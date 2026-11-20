@@ -7,6 +7,7 @@
 
 #include "apsp.hpp"
 #include "gpu/apsp_gpu.hpp"
+#include "gpu/histogram_gpu.hpp"
 #include "gpu/nearest_gpu.hpp"
 #include "thread_pool.hpp"
 
@@ -44,6 +45,14 @@ public:
     // de la GPU se reserva en el primer pedido (o si llega una tabla más grande) y la tabla queda en la GPU.
     std::future<ThreadPool::Outcome<Apsp>> apsp(DistanceTable initial);
 
+    struct HistogramResult {
+        Histogram counts;
+        HistogramGpu::Timing timing;
+    };
+    // H1: encola el histograma de los tiempos de entrega, privatizado en memoria compartida (`privatize`) o con
+    // atómicos globales (para comparar). La memoria se reserva en el primer pedido o si llegan más datos.
+    std::future<ThreadPool::Outcome<HistogramResult>> histogram(std::vector<std::uint32_t> ms, bool privatize);
+
     // El nombre del dispositivo (leído en el hilo dueño al crear el objeto).
     const std::string& deviceName() const { return _deviceName; }
 
@@ -51,6 +60,8 @@ private:
     std::unique_ptr<NearestGpu> _nearest;  // solo lo toca el hilo de _thread
     std::unique_ptr<ApspGpu> _apsp;        // ídem
     std::size_t _apspStride = 0;           // ídem: el tamaño reservado para _apsp
+    std::unique_ptr<HistogramGpu> _histogram;  // ídem
+    std::size_t _histogramCapacity = 0;        // ídem
     std::string _deviceName;
     ThreadPool _thread{1};                  // se destruye primero: join antes de que _nearest deje de existir
 };

@@ -1,5 +1,6 @@
 #include "cli.hpp"
 
+#include <map>
 #include <set>
 
 namespace {
@@ -21,8 +22,14 @@ CliArgs parseArgs(const std::vector<std::string>& args)
     std::set<std::string> seen;
     for (std::size_t i = 1; i < args.size(); ++i) {
         const std::string& flag = args[i];
-        if (flag != "--log" && flag != "--headless" && flag != "--bench" && flag != "--bench-once" &&
-            flag != "--bench-app") {
+        // Las que llevan un valor, con lo que dice el error si falta.
+        static const std::map<std::string, std::string> withValue = {
+            {"--log", "--log necesita la ruta del archivo de log"},
+            {"--bench", "--bench necesita la ruta del archivo CSV"},
+            {"--bench-app", "--bench-app necesita el nombre de una aplicación"},
+            {"--report", "--report necesita la ruta del archivo del reporte"},
+        };
+        if (flag != "--headless" && flag != "--bench-once" && withValue.count(flag) == 0) {
             throw CliError("argumento desconocido '" + flag + "'");
         }
         if (!seen.insert(flag).second) {
@@ -32,22 +39,33 @@ CliArgs parseArgs(const std::vector<std::string>& args)
             result.headless = true;
         } else if (flag == "--bench-once") {
             result.benchOnce = true;
-        } else {  // --log, --bench y --bench-app llevan un valor
+        } else {
             if (i + 1 == args.size() || isFlag(args[i + 1])) {
-                throw CliError(flag == "--log"     ? "--log necesita la ruta del archivo de log"
-                               : flag == "--bench" ? "--bench necesita la ruta del archivo CSV"
-                                                   : "--bench-app necesita el nombre de una aplicación");
+                throw CliError(withValue.at(flag));
             }
-            (flag == "--log" ? result.logPath : flag == "--bench" ? result.benchPath : result.benchApp) = args[++i];
+            const std::string& value = args[++i];
+            if (flag == "--log") {
+                result.logPath = value;
+            } else if (flag == "--bench") {
+                result.benchPath = value;
+            } else if (flag == "--bench-app") {
+                result.benchApp = value;
+            } else {
+                result.reportPath = value;
+            }
         }
     }
     if (!result.benchApp.empty() && !result.bench()) {
         throw CliError("--bench-app solo sirve con --bench o --bench-once");
+    }
+    if (!result.reportPath.empty() && result.bench()) {
+        throw CliError("--report es de la simulación: no se combina con --bench ni --bench-once");
     }
     return result;
 }
 
 const char* usage()
 {
-    return "uso: delivery_sim <config.json> [--log <path>] [--headless] [--bench <csv>] [--bench-once] [--bench-app <nombre>]\n";
+    return "uso: delivery_sim <config.json> [--log <path>] [--headless] [--report <json>]\n"
+           "     delivery_sim <config.json> --bench <csv> | --bench-once [--bench-app <nombre>]\n";
 }

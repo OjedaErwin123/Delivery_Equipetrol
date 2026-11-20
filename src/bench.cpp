@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "apsp.hpp"
+#include "histogram.hpp"
 #include "nearest.hpp"
 #include "thread_pool.hpp"
 #ifdef DELIVERY_USE_CUDA
@@ -236,16 +237,86 @@ void benchApsp(const SimParams& params, Csv& csv, std::ostream& progress, int re
     }
 }
 
+// H1: el histograma de los tiempos de entrega. Tamaño = entregas: de 10^3 (una corrida corta) a 10^7 (una corrida
+// larga de la ciudad, o la repetición de muchos logs). Los tiempos son sintéticos con una forma parecida a la de la
+// ciudad: la suma de tres sorteos uniformes de 5 a 60 minutos (semilla fija). Además de las cuatro versiones,
+// gpu_kernel_global: el kernel ingenuo con un atómico global por entrega, para medir la contención.
+void benchHistogram(const SimParams&, Csv& csv, std::ostream& progress, int repetitions, GpuOwner* gpu)
+{
+    static const char* kApp = "h1_delivery_times";
+    std::map<std::size_t, std::unique_ptr<ThreadPool>> pools;
+    for (std::size_t t : threadCounts()) {
+        pools[t] = std::make_unique<ThreadPool>(t);
+    }
+#ifndef DELIVERY_USE_CUDA
+    (void)gpu;
+#endif
+    for (std::size_t n : {std::size_t{1000}, std::size_t{10000}, std::size_t{100000}, std::size_t{1000000},
+                          std::size_t{10000000}}) {
+        std::mt19937 random(static_cast<std::uint32_t>(7 + n));
+        std::vector<std::uint32_t> ms(n);
+        for (std::uint32_t& value : ms) {
+            value = 0;
+            for (int k = 0; k < 3; ++k) {
+                value += 300000 + random() % 3300000;  // de 5 a 60 minutos, en ms
+            }
+        }
+        const Histogram reference = deliveryHistogram(ms);
+        auto runAll = [&](int rep) {
+            auto start = std::chrono::steady_clock::now();
+            bool ok = deliveryHistogram(ms) == reference;
+            double took = msSince(start);
+            if (rep >= 0) {
+                csv.row(kApp, "cpu_1", 1, n, rep, took, ok);
+            }
+            for (auto& pool : pools) {
+                start = std::chrono::steady_clock::now();
+                ok = deliveryHistogramParallel(ms, *pool.second) == reference;
+                took = msSince(start);
+                if (rep >= 0) {
+                    csv.row(kApp, "cpu_threads", pool.first, n, rep, took, ok);
+                }
+            }
+#ifdef DELIVERY_USE_CUDA
+            start = std::chrono::steady_clock::now();
+            const GpuOwner::HistogramResult result = gpu->histogram(ms, true).get().take();
+            took = msSince(start);
+            ok = result.counts == reference;
+            const GpuOwner::HistogramResult naive = gpu->histogram(ms, false).get().take();
+            if (rep >= 0) {
+                csv.row(kApp, "gpu_kernel", 1, n, rep, result.timing.kernelMs, ok);
+                csv.row(kApp, "gpu_end_to_end", 1, n, rep, result.timing.endToEndMs, ok);
+                csv.row(kApp, "gpu_via_owner", 1, n, rep, took, ok);
+                csv.row(kApp, "gpu_kernel_global", 1, n, rep, naive.timing.kernelMs, naive.counts == reference);
+            }
+#endif
+        };
+        runAll(-1);
+        for (int rep = 0; rep < repetitions; ++rep) {
+            runAll(rep);
+        }
+        progress << kApp << " n=" << n << ":" << csv.medians() << "\n";
+    }
+}
+
 }  // namespace
 
 int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& progress, int repetitions,
                   const std::string& only)
 {
     using Bench = void (*)(const SimParams&, Csv&, std::ostream&, int, GpuOwner*);
-    const std::vector<std::pair<std::string, Bench>> apps = {{"r1_nearest", benchNearest}, {"t1_apsp", benchApsp}};
+    const std::vector<std::pair<std::string, Bench>> apps = {
+        {"r1_nearest", benchNearest},
+        {"t1_apsp", benchApsp},
+        {"h1_delivery_times", benchHistogram},
+    };
     if (!only.empty() &&
         std::none_of(apps.begin(), apps.end(), [&only](const auto& app) { return app.first == only; })) {
-        throw std::invalid_argument("no hay ninguna aplicación '" + only + "' (r1_nearest, t1_apsp)");
+        std::string names;
+        for (const auto& app : apps) {
+            names += (names.empty() ? "" : ", ") + app.first;
+        }
+        throw std::invalid_argument("no hay ninguna aplicación '" + only + "' (" + names + ")");
     }
     std::string machine = cpuModel() + " x" + std::to_string(ThreadPool::defaultSize());
 #ifdef DELIVERY_USE_CUDA

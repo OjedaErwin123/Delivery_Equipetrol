@@ -122,13 +122,16 @@ add_executable(delivery_sim
   src/event_log.cpp
   src/nearest.cpp
   src/apsp.cpp
+  src/histogram.cpp
+  src/report.cpp
   src/bench.cpp
 )
 delivery_target_options(delivery_sim)
 target_link_libraries(delivery_sim PRIVATE nlohmann_json)
 if(USE_CUDA)
   # EC2: el hilo dueño de la GPU y los kernels. Sin USE_CUDA, delivery_sim no tiene nada de GPU (ni la emulación).
-  target_sources(delivery_sim PRIVATE src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu src/gpu/gpu_owner.cpp)
+  target_sources(delivery_sim PRIVATE src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu src/gpu/histogram_gpu.cu
+                 src/gpu/gpu_owner.cpp)
   target_compile_definitions(delivery_sim PRIVATE DELIVERY_USE_CUDA)
 endif()
 if(DELIVERY_WINDOW)
@@ -313,10 +316,11 @@ function(delivery_cuda_sources)
 endfunction()
 
 delivery_cuda_sources(tests/gpu_smoke_check.cu tests/gpu_nearest_check.cu tests/gpu_apsp_check.cu
-                      src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu)
+                      tests/gpu_histogram_check.cu src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu
+                      src/gpu/histogram_gpu.cu)
 # Lo que usa el hilo dueño de la GPU (gpu_owner.cpp): todas las aplicaciones.
-set(DELIVERY_GPU_SOURCES src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu src/gpu/gpu_owner.cpp src/nearest.cpp
-    src/apsp.cpp src/road_graph.cpp src/thread_pool.cpp)
+set(DELIVERY_GPU_SOURCES src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu src/gpu/histogram_gpu.cu
+    src/gpu/gpu_owner.cpp src/nearest.cpp src/apsp.cpp src/histogram.cpp src/road_graph.cpp src/thread_pool.cpp)
 add_executable(gpu_smoke_check tests/gpu_smoke_check.cu)
 delivery_target_options(gpu_smoke_check)
 add_test(NAME gpu_smoke_check COMMAND gpu_smoke_check)
@@ -340,3 +344,20 @@ add_executable(gpu_apsp_check tests/gpu_apsp_check.cu ${DELIVERY_GPU_SOURCES} sr
 delivery_target_options(gpu_apsp_check)
 target_link_libraries(gpu_apsp_check PRIVATE nlohmann_json)
 add_test(NAME gpu_apsp_check COMMAND gpu_apsp_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
+
+# H1: el histograma de los tiempos de entrega. Versiones de CPU, prueba de igualdad de la GPU y el reporte
+# (--report: la simulación, su log releído y el histograma).
+add_executable(histogram_check tests/histogram_check.cpp src/histogram.cpp src/thread_pool.cpp)
+delivery_target_options(histogram_check)
+add_test(NAME histogram_check COMMAND histogram_check)
+
+add_executable(gpu_histogram_check tests/gpu_histogram_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_histogram_check)
+add_test(NAME gpu_histogram_check COMMAND gpu_histogram_check)
+
+add_executable(report_check tests/report_check.cpp src/report.cpp src/histogram.cpp src/config.cpp
+               src/simulation.cpp src/thread_pool.cpp src/estimate.cpp src/road_graph.cpp src/courier.cpp
+               src/travel.cpp src/restaurant.cpp src/fleet.cpp src/order_book.cpp src/event_log.cpp)
+delivery_target_options(report_check)
+target_link_libraries(report_check PRIVATE nlohmann_json)
+add_test(NAME report_check COMMAND report_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)

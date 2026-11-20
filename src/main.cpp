@@ -17,6 +17,7 @@
 #include "bench.hpp"
 #include "cli.hpp"
 #include "config.hpp"
+#include "report.hpp"
 #ifdef DELIVERY_USE_CUDA
 #include "apsp.hpp"
 #include "gpu/gpu_owner.hpp"
@@ -137,6 +138,24 @@ int main(int argc, char** argv)
         // terminar por tiempo no hay ese límite: 5 s. Una tecla o la X la cierran antes.
         const bool askedToStop = stopSignalFlag().load() || closedFromWindow;
         window->showFinal(summary, lastFrame + std::chrono::seconds(askedToStop ? 2 : 5));
+    }
+    if (!args.reportPath.empty()) {
+        // EC2: el reporte de las aplicaciones de tipo A. Recién acá, con la simulación terminada y el resumen ya
+        // escrito: relee el log (una "repetición del log") y no cambia nada de lo que pasó.
+        log.flush();
+        std::ifstream replayed(args.logPath);
+        std::ofstream report(args.reportPath);
+        if (!replayed || !report) {
+            std::cerr << "delivery_sim: no se pudo releer el log o escribir '" << args.reportPath << "'\n";
+            return 1;
+        }
+        try {
+            writeReport(replayLog(replayed), params.gpu.get(), report);
+            std::cerr << "delivery_sim: reporte en '" << args.reportPath << "'\n";
+        } catch (const std::exception& e) {
+            std::cerr << "delivery_sim: el reporte falló: " << e.what() << "\n";
+            return 1;
+        }
     }
     return 0;
 }
