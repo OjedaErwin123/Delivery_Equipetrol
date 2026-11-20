@@ -22,6 +22,9 @@ struct LogReplay {
     // de las líneas orderCreated) el índice de su restaurante en `restaurants`.
     std::vector<std::string> restaurants;
     std::vector<std::uint32_t> restaurantOf;
+    // R2: por pedido creado (mismo orden), su tiempo de entrega, o kNotDelivered (segment_stats.hpp) si no se
+    // entregó (rechazado o pendiente).
+    std::vector<std::uint32_t> orderDeliveryMs;
 };
 
 // Lee un log de delivery_sim (un JSON por línea). Lanza std::runtime_error con el número de línea si una no se

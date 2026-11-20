@@ -26,6 +26,7 @@ GpuOwner::~GpuOwner()
             _apsp.reset();
             _histogram.reset();
             _grouping.reset();
+            _segmentStats.reset();
             return true;
         })
         .get();
@@ -82,6 +83,24 @@ std::future<ThreadPool::Outcome<GpuOwner::GroupResult>> GpuOwner::group(std::vec
         }
         GroupResult result;
         result.grouping = _grouping->group(restaurantOf, restaurants, &result.timing);
+        return result;
+    });
+}
+
+std::future<ThreadPool::Outcome<GpuOwner::SegmentStatsResult>> GpuOwner::segmentStats(Grouping groups,
+                                                                                      std::vector<std::uint32_t> deliveryMs)
+{
+    return _thread.submit([this, groups = std::move(groups), deliveryMs = std::move(deliveryMs)] {
+        const std::size_t restaurants = groups.offsets.empty() ? 0 : groups.offsets.size() - 1;
+        if (!_segmentStats || deliveryMs.size() > _segmentCapacity || restaurants > _segmentRestaurants) {
+            _segmentStats.reset();
+            _segmentCapacity = std::max(deliveryMs.size(), _segmentCapacity);
+            _segmentCapacity = std::max<std::size_t>(_segmentCapacity, 1);
+            _segmentRestaurants = std::max<std::size_t>({restaurants, _segmentRestaurants, 64});
+            _segmentStats = std::make_unique<SegmentStatsGpu>(_segmentCapacity, _segmentRestaurants);
+        }
+        SegmentStatsResult result;
+        result.stats = _segmentStats->stats(groups, deliveryMs, &result.timing);
         return result;
     });
 }

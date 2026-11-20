@@ -10,6 +10,7 @@
 #include "gpu/grouping_gpu.hpp"
 #include "gpu/histogram_gpu.hpp"
 #include "gpu/nearest_gpu.hpp"
+#include "gpu/segment_stats_gpu.hpp"
 #include "thread_pool.hpp"
 
 // EC2: el hilo dueño de la GPU. Toda llamada a CUDA (crear el contexto, reservar memoria, copiar, lanzar
@@ -63,6 +64,14 @@ public:
     // el primer pedido o si llegan más pedidos.
     std::future<ThreadPool::Outcome<GroupResult>> group(std::vector<std::uint32_t> restaurantOf, std::size_t restaurants);
 
+    struct SegmentStatsResult {
+        std::vector<RestaurantStats> stats;
+        SegmentStatsGpu::Timing timing;
+    };
+    // R2: encola la reducción segmentada por restaurante (entregas, suma y máximo del tiempo de entrega) sobre los
+    // grupos de SC1. La memoria se reserva en el primer pedido o si llegan más pedidos o restaurantes.
+    std::future<ThreadPool::Outcome<SegmentStatsResult>> segmentStats(Grouping groups, std::vector<std::uint32_t> deliveryMs);
+
     // El nombre del dispositivo (leído en el hilo dueño al crear el objeto).
     const std::string& deviceName() const { return _deviceName; }
 
@@ -74,6 +83,8 @@ private:
     std::size_t _histogramCapacity = 0;        // ídem
     std::unique_ptr<GroupingGpu> _grouping;    // ídem
     std::size_t _groupingCapacity = 0;         // ídem
+    std::unique_ptr<SegmentStatsGpu> _segmentStats;  // ídem
+    std::size_t _segmentCapacity = 0, _segmentRestaurants = 0;  // ídem
     std::string _deviceName;
     ThreadPool _thread{1};                  // se destruye primero: join antes de que _nearest deje de existir
 };

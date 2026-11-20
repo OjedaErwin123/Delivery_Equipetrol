@@ -7,6 +7,7 @@
 
 #include "grouping.hpp"
 #include "histogram.hpp"
+#include "segment_stats.hpp"
 #ifdef DELIVERY_USE_CUDA
 #include "gpu/gpu_owner.hpp"
 #endif
@@ -15,6 +16,7 @@ LogReplay replayLog(std::istream& log)
 {
     LogReplay replay;
     std::unordered_map<std::string, std::int64_t> createdAt;
+    std::unordered_map<std::string, std::size_t> createdIndex;  // posición en el orden de creación
     std::unordered_map<std::string, std::uint32_t> restaurantIndex;
     std::string line;
     for (std::size_t number = 1; std::getline(log, line); ++number) {
@@ -27,7 +29,10 @@ LogReplay replayLog(std::istream& log)
             const nlohmann::json event = nlohmann::json::parse(line);
             const std::string& kind = event.at("event").get_ref<const std::string&>();
             if (kind == "orderCreated") {
-                createdAt[event.at("order").get<std::string>()] = event.at("t").get<std::int64_t>();
+                const std::string order = event.at("order").get<std::string>();
+                createdAt[order] = event.at("t").get<std::int64_t>();
+                createdIndex[order] = replay.orderDeliveryMs.size();
+                replay.orderDeliveryMs.push_back(kNotDelivered);
                 const std::string& restaurant = event.at("restaurant").get_ref<const std::string&>();
                 const auto index =
                     restaurantIndex.emplace(restaurant, static_cast<std::uint32_t>(replay.restaurants.size()));
@@ -36,9 +41,10 @@ LogReplay replayLog(std::istream& log)
                 }
                 replay.restaurantOf.push_back(index.first->second);
             } else if (kind == "orderDelivered") {
-                const std::int64_t took =
-                    event.at("t").get<std::int64_t>() - createdAt.at(event.at("order").get<std::string>());
+                const std::string order = event.at("order").get<std::string>();
+                const std::int64_t took = event.at("t").get<std::int64_t>() - createdAt.at(order);
                 replay.deliveryMs.push_back(static_cast<std::uint32_t>(took));
+                replay.orderDeliveryMs[createdIndex.at(order)] = static_cast<std::uint32_t>(took);
                 ++replay.delivered;
             }
         } catch (const std::exception& error) {
@@ -98,6 +104,30 @@ void writeReport(const LogReplay& replay, GpuOwner* gpu, std::ostream& out)
     if (groups.offsets.empty()) {
         groups = groupByRestaurant(replay.restaurantOf, restaurants);
     }
+    // R2: por restaurante, entregas, promedio y máximo del tiempo de entrega (reducción segmentada sobre los grupos).
+    std::vector<RestaurantStats> stats;
+    std::string statsWhere = "CPU";
+#ifdef DELIVERY_USE_CUDA
+    if (gpu != nullptr) {
+        stats = gpu->segmentStats(groups, replay.orderDeliveryMs).get().take().stats;
+        statsWhere = "GPU (" + gpu->deviceName() + ")";
+    }
+#endif
+    if (stats.empty()) {
+        stats = statsPerRestaurant(groups, replay.orderDeliveryMs);
+    }
+    nlohmann::json statsPerName = nlohmann::json::object();
+    for (std::size_t r = 0; r < restaurants; ++r) {
+        const RestaurantStats& s = stats[r];
+        statsPerName[replay.restaurants[r]] = {
+            {"created", groups.offsets[r + 1] - groups.offsets[r]},
+            {"delivered", s.delivered},
+            {"avgDeliveryMs", s.delivered == 0 ? 0 : s.totalMs / s.delivered},
+            {"maxDeliveryMs", s.maxMs},
+        };
+    }
+    report["r2_perRestaurant"] = {{"computedOn", statsWhere}, {"restaurants", statsPerName}};
+
     nlohmann::json perRestaurant = nlohmann::json::object();
     for (std::size_t r = 0; r < restaurants; ++r) {
         const std::uint32_t begin = groups.offsets[r], end = groups.offsets[r + 1];

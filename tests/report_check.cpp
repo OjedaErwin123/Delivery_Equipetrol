@@ -4,6 +4,7 @@
 //    orderDelivered; el promedio y el máximo recalculados desde el log = los del resumen;
 //  - SC1: un restaurante por pedido creado; grupos contiguos, con solo pedidos de su restaurante, en orden de
 //    creación; conteos = los recontados;
+//  - R2: por restaurante, creados y entregas suman los del resumen; máximo y promedio = los del resumen;
 //  - una línea del log que no es JSON, o a la que le falta un campo, se informa con su número de línea.
 // Sale con 0 si todo está bien.
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include "grouping.hpp"
 #include "log_line.hpp"
 #include "report.hpp"
+#include "segment_stats.hpp"
 #include "simulation.hpp"
 
 int main(int argc, char** argv)
@@ -86,7 +88,27 @@ int main(int argc, char** argv)
                 contiguous && expectedOffset == replay.restaurantOf.size());
     ok &= check("cada grupo tiene solo pedidos de su restaurante, en orden de creación", own && stable);
 
-    auto lineOfError = [](const std::string& text) {
+    // R2: por restaurante, creados = su grupo; la suma de las entregas = delivered del resumen; el promedio
+    // ponderado y el máximo entre restaurantes = los del resumen (recalculados desde el log).
+    const nlohmann::json& r2 = report.at("r2_perRestaurant");
+    std::int64_t r2Delivered = 0, r2Created = 0, r2Max = 0, r2Total = 0;
+    for (const auto& entry : r2.at("restaurants").items()) {
+        const nlohmann::json& v = entry.value();
+        r2Created += v.at("created").get<std::int64_t>();
+        r2Delivered += v.at("delivered").get<std::int64_t>();
+        r2Max = std::max(r2Max, v.at("maxDeliveryMs").get<std::int64_t>());
+    }
+    for (std::uint32_t ms : replay.orderDeliveryMs) {
+        r2Total += ms == kNotDelivered ? 0 : ms;
+    }
+    std::cout << "R2: " << r2Delivered << " entregas en " << r2.at("restaurants").size()
+              << " restaurantes · calculado en " << r2.at("computedOn") << "\n";
+    ok &= check("R2: creados y entregas por restaurante suman los del resumen",
+                r2Created == s.created && r2Delivered == s.delivered);
+    ok &= check("R2: el máximo entre restaurantes y el promedio de todo = los del resumen",
+                r2Max == s.maxDeliveryMs && r2Total / r2Delivered == s.avgDeliveryMs);
+
+    auto lineOfError =[](const std::string& text) {
         try {
             std::istringstream bad(text);
             replayLog(bad);

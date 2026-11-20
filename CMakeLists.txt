@@ -124,6 +124,7 @@ add_executable(delivery_sim
   src/apsp.cpp
   src/histogram.cpp
   src/grouping.cpp
+  src/segment_stats.cpp
   src/report.cpp
   src/bench.cpp
 )
@@ -132,7 +133,7 @@ target_link_libraries(delivery_sim PRIVATE nlohmann_json)
 if(USE_CUDA)
   # EC2: el hilo dueño de la GPU y los kernels. Sin USE_CUDA, delivery_sim no tiene nada de GPU (ni la emulación).
   target_sources(delivery_sim PRIVATE src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu src/gpu/histogram_gpu.cu
-                 src/gpu/grouping_gpu.cu src/gpu/gpu_owner.cpp)
+                 src/gpu/grouping_gpu.cu src/gpu/segment_stats_gpu.cu src/gpu/gpu_owner.cpp)
   target_compile_definitions(delivery_sim PRIVATE DELIVERY_USE_CUDA)
 endif()
 if(DELIVERY_WINDOW)
@@ -317,12 +318,13 @@ function(delivery_cuda_sources)
 endfunction()
 
 delivery_cuda_sources(tests/gpu_smoke_check.cu tests/gpu_nearest_check.cu tests/gpu_apsp_check.cu
-                      tests/gpu_histogram_check.cu tests/gpu_grouping_check.cu src/gpu/nearest_gpu.cu
-                      src/gpu/apsp_gpu.cu src/gpu/histogram_gpu.cu src/gpu/grouping_gpu.cu)
+                      tests/gpu_histogram_check.cu tests/gpu_grouping_check.cu tests/gpu_segment_stats_check.cu
+                      src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu src/gpu/histogram_gpu.cu src/gpu/grouping_gpu.cu
+                      src/gpu/segment_stats_gpu.cu)
 # Lo que usa el hilo dueño de la GPU (gpu_owner.cpp): todas las aplicaciones.
 set(DELIVERY_GPU_SOURCES src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu src/gpu/histogram_gpu.cu src/gpu/grouping_gpu.cu
-    src/gpu/gpu_owner.cpp src/nearest.cpp src/apsp.cpp src/histogram.cpp src/grouping.cpp src/road_graph.cpp
-    src/thread_pool.cpp)
+    src/gpu/segment_stats_gpu.cu src/gpu/gpu_owner.cpp src/nearest.cpp src/apsp.cpp src/histogram.cpp
+    src/grouping.cpp src/segment_stats.cpp src/road_graph.cpp src/thread_pool.cpp)
 add_executable(gpu_smoke_check tests/gpu_smoke_check.cu)
 delivery_target_options(gpu_smoke_check)
 add_test(NAME gpu_smoke_check COMMAND gpu_smoke_check)
@@ -357,7 +359,8 @@ add_executable(gpu_histogram_check tests/gpu_histogram_check.cu ${DELIVERY_GPU_S
 delivery_target_options(gpu_histogram_check)
 add_test(NAME gpu_histogram_check COMMAND gpu_histogram_check)
 
-add_executable(report_check tests/report_check.cpp src/report.cpp src/histogram.cpp src/grouping.cpp src/config.cpp
+add_executable(report_check tests/report_check.cpp src/report.cpp src/histogram.cpp src/grouping.cpp
+               src/segment_stats.cpp src/config.cpp
                src/simulation.cpp src/thread_pool.cpp src/estimate.cpp src/road_graph.cpp src/courier.cpp
                src/travel.cpp src/restaurant.cpp src/fleet.cpp src/order_book.cpp src/event_log.cpp)
 delivery_target_options(report_check)
@@ -373,3 +376,14 @@ add_test(NAME grouping_check COMMAND grouping_check)
 add_executable(gpu_grouping_check tests/gpu_grouping_check.cu ${DELIVERY_GPU_SOURCES})
 delivery_target_options(gpu_grouping_check)
 add_test(NAME gpu_grouping_check COMMAND gpu_grouping_check)
+
+# R2: estadísticas por restaurante (reducción segmentada sobre los grupos de SC1). Versiones de CPU y prueba de
+# igualdad de la GPU; el reporte lo prueba report_check.
+add_executable(segment_stats_check tests/segment_stats_check.cpp src/segment_stats.cpp src/grouping.cpp
+               src/thread_pool.cpp)
+delivery_target_options(segment_stats_check)
+add_test(NAME segment_stats_check COMMAND segment_stats_check)
+
+add_executable(gpu_segment_stats_check tests/gpu_segment_stats_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_segment_stats_check)
+add_test(NAME gpu_segment_stats_check COMMAND gpu_segment_stats_check)

@@ -17,6 +17,7 @@
 #include "grouping.hpp"
 #include "histogram.hpp"
 #include "nearest.hpp"
+#include "segment_stats.hpp"
 #include "thread_pool.hpp"
 #ifdef DELIVERY_USE_CUDA
 #include "gpu/gpu_owner.hpp"
@@ -357,6 +358,66 @@ void benchGrouping(const SimParams& params, Csv& csv, std::ostream& progress, in
     }
 }
 
+// R2: por restaurante, entregas, suma y máximo del tiempo de entrega (reducción segmentada sobre los grupos de SC1).
+// Tamaño = pedidos, de 10^3 a 10^7; restaurante al azar (37 en la ciudad), uno de cada cuatro sin entregar y los
+// demás con un tiempo de 1 a 121 minutos (semilla fija). El agrupamiento se hace una vez, fuera de la medición: se
+// mide solo la reducción.
+void benchSegmentStats(const SimParams& params, Csv& csv, std::ostream& progress, int repetitions, GpuOwner* gpu)
+{
+    static const char* kApp = "r2_per_restaurant";
+    const std::size_t restaurants = params.restaurants.size();
+    std::map<std::size_t, std::unique_ptr<ThreadPool>> pools;
+    for (std::size_t t : threadCounts()) {
+        pools[t] = std::make_unique<ThreadPool>(t);
+    }
+#ifndef DELIVERY_USE_CUDA
+    (void)gpu;
+#endif
+    for (std::size_t n : {std::size_t{1000}, std::size_t{10000}, std::size_t{100000}, std::size_t{1000000},
+                          std::size_t{10000000}}) {
+        std::mt19937 random(static_cast<std::uint32_t>(17 + n));
+        std::vector<std::uint32_t> restaurantOf(n), deliveryMs(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            restaurantOf[i] = static_cast<std::uint32_t>(random() % restaurants);
+            deliveryMs[i] = random() % 4 == 0 ? kNotDelivered : 60000 + random() % 7200000;
+        }
+        const Grouping groups = groupByRestaurant(restaurantOf, restaurants);
+        const std::vector<RestaurantStats> reference = statsPerRestaurant(groups, deliveryMs);
+        auto runAll = [&](int rep) {
+            auto start = std::chrono::steady_clock::now();
+            bool ok = statsPerRestaurant(groups, deliveryMs) == reference;
+            double took = msSince(start);
+            if (rep >= 0) {
+                csv.row(kApp, "cpu_1", 1, n, rep, took, ok);
+            }
+            for (auto& pool : pools) {
+                start = std::chrono::steady_clock::now();
+                ok = statsPerRestaurantParallel(groups, deliveryMs, *pool.second) == reference;
+                took = msSince(start);
+                if (rep >= 0) {
+                    csv.row(kApp, "cpu_threads", pool.first, n, rep, took, ok);
+                }
+            }
+#ifdef DELIVERY_USE_CUDA
+            start = std::chrono::steady_clock::now();
+            const GpuOwner::SegmentStatsResult result = gpu->segmentStats(groups, deliveryMs).get().take();
+            took = msSince(start);
+            ok = result.stats == reference;
+            if (rep >= 0) {
+                csv.row(kApp, "gpu_kernel", 1, n, rep, result.timing.kernelMs, ok);
+                csv.row(kApp, "gpu_end_to_end", 1, n, rep, result.timing.endToEndMs, ok);
+                csv.row(kApp, "gpu_via_owner", 1, n, rep, took, ok);
+            }
+#endif
+        };
+        runAll(-1);
+        for (int rep = 0; rep < repetitions; ++rep) {
+            runAll(rep);
+        }
+        progress << kApp << " n=" << n << ":" << csv.medians() << "\n";
+    }
+}
+
 }  // namespace
 
 int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& progress, int repetitions,
@@ -368,6 +429,7 @@ int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& prog
         {"t1_apsp", benchApsp},
         {"h1_delivery_times", benchHistogram},
         {"sc1_group", benchGrouping},
+        {"r2_per_restaurant", benchSegmentStats},
     };
     if (!only.empty() &&
         std::none_of(apps.begin(), apps.end(), [&only](const auto& app) { return app.first == only; })) {
