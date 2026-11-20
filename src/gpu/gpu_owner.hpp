@@ -7,6 +7,7 @@
 
 #include "apsp.hpp"
 #include "gpu/apsp_gpu.hpp"
+#include "gpu/coverage_gpu.hpp"
 #include "gpu/grouping_gpu.hpp"
 #include "gpu/heatmap_gpu.hpp"
 #include "gpu/histogram_gpu.hpp"
@@ -94,6 +95,15 @@ public:
     // una grilla más grande.
     std::future<ThreadPool::Outcome<HeatmapResult>> heatmap(Grid in, std::vector<float> filter, bool tiled);
 
+    struct CoverageResult {
+        std::vector<std::uint32_t> distance;
+        CoverageGpu::Timing timing;
+    };
+    // S1: encola `sweeps` barridos de Jacobi del mapa de cobertura, por bloques con halo en memoria compartida
+    // (`tiled`) o básicos (para comparar). Los datos se quedan en la GPU entre barridos. La memoria se reserva en el
+    // primer pedido o si llega una grilla más grande.
+    std::future<ThreadPool::Outcome<CoverageResult>> coverage(CoverageGrid grid, int sweeps, bool tiled);
+
     // El nombre del dispositivo (leído en el hilo dueño al crear el objeto).
     const std::string& deviceName() const { return _deviceName; }
 
@@ -111,6 +121,8 @@ private:
     std::size_t _slotCapacity = 0;                              // ídem
     std::unique_ptr<HeatmapGpu> _heatmap;                       // ídem
     std::size_t _heatmapCells = 0;                              // ídem
+    std::unique_ptr<CoverageGpu> _coverage;                     // ídem
+    std::size_t _coverageCells = 0;                             // ídem
     std::string _deviceName;
     ThreadPool _thread{1};                  // se destruye primero: join antes de que _nearest deje de existir
 };

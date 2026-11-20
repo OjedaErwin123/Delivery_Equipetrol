@@ -1,11 +1,13 @@
 #include "report.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 #include <unordered_map>
 
 #include <nlohmann/json.hpp>
 
+#include "coverage.hpp"
 #include "grouping.hpp"
 #include "heatmap.hpp"
 #include "histogram.hpp"
@@ -60,30 +62,50 @@ LogReplay replayLog(std::istream& log)
 
 namespace {
 
-constexpr int kHeatmapSide = 128;  // C1: celdas por lado de la grilla del mapa de calor
-constexpr int kHotspots = 5;       // C1: celdas más calientes que se informan
+constexpr int kHeatmapSide = 128;   // C1: celdas por lado de la grilla del mapa de calor
+constexpr int kHotspots = 5;        // C1: celdas más calientes que se informan
+constexpr int kCoverageSide = 128;  // S1: celdas por lado de la grilla de cobertura
 
-// C1: el mapa de calor de la demanda. Una grilla de kHeatmapSide x kHeatmapSide sobre los límites de la red (norte
-// arriba); cada pedido creado suma 1 en la celda de su restaurante; después, la convolución gaussiana (en la GPU, por
-// bloques; o en la CPU). Informa las celdas más calientes con su centro en coordenadas.
+// Una grilla de side x side sobre los límites de la red vial (norte arriba): la celda de una coordenada y el centro
+// de una celda. La comparten C1 y S1.
+struct CityGrid {
+    int side = 0;
+    double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+    double latSpan = 0, lonSpan = 0;
+
+    CityGrid(const RoadGraph& graph, int cells) : side(cells)
+    {
+        for (std::size_t i = 0; i < graph.nodeCount(); ++i) {
+            const Coordinates& at = graph.coordinates(i);
+            minLat = std::min(minLat, at.lat), maxLat = std::max(maxLat, at.lat);
+            minLon = std::min(minLon, at.lon), maxLon = std::max(maxLon, at.lon);
+        }
+        latSpan = std::max(maxLat - minLat, 1e-9), lonSpan = std::max(maxLon - minLon, 1e-9);
+    }
+    int xOf(double lon) const { return static_cast<int>((lon - minLon) / lonSpan * (side - 1) + 0.5); }
+    int yOf(double lat) const { return static_cast<int>((maxLat - lat) / latSpan * (side - 1) + 0.5); }
+    std::size_t cellOf(const Coordinates& at) const
+    {
+        return static_cast<std::size_t>(yOf(at.lat)) * side + static_cast<std::size_t>(xOf(at.lon));
+    }
+    double latOf(int y) const { return maxLat - latSpan * y / (side - 1); }
+    double lonOf(int x) const { return minLon + lonSpan * x / (side - 1); }
+    nlohmann::json bounds() const
+    {
+        return {{"minLat", minLat}, {"maxLat", maxLat}, {"minLon", minLon}, {"maxLon", maxLon}};
+    }
+};
+
+// C1: el mapa de calor de la demanda. Una grilla de kHeatmapSide x kHeatmapSide sobre los límites de la red; cada
+// pedido creado suma 1 en la celda de su restaurante; después, la convolución gaussiana (en la GPU, por bloques; o en
+// la CPU). Informa las celdas más calientes con su centro en coordenadas.
 nlohmann::json heatmapReport(const LogReplay& replay, const World& world, GpuOwner* gpu)
 {
     const RoadGraph& graph = world.graph;
-    double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
-    for (std::size_t i = 0; i < graph.nodeCount(); ++i) {
-        const Coordinates& at = graph.coordinates(i);
-        minLat = std::min(minLat, at.lat), maxLat = std::max(maxLat, at.lat);
-        minLon = std::min(minLon, at.lon), maxLon = std::max(maxLon, at.lon);
-    }
-    const double latSpan = std::max(maxLat - minLat, 1e-9), lonSpan = std::max(maxLon - minLon, 1e-9);
-    auto cellOf = [&](const Coordinates& at) {
-        const int x = static_cast<int>((at.lon - minLon) / lonSpan * (kHeatmapSide - 1) + 0.5);
-        const int y = static_cast<int>((maxLat - at.lat) / latSpan * (kHeatmapSide - 1) + 0.5);
-        return static_cast<std::size_t>(y) * kHeatmapSide + static_cast<std::size_t>(x);
-    };
+    const CityGrid city(graph, kHeatmapSide);
     std::vector<std::size_t> cellOfRestaurant;
     for (const std::string& r : replay.restaurants) {
-        cellOfRestaurant.push_back(cellOf(graph.coordinates(world.restaurantNode.at(r))));
+        cellOfRestaurant.push_back(city.cellOf(graph.coordinates(world.restaurantNode.at(r))));
     }
     Grid in;
     in.width = in.height = kHeatmapSide;
@@ -118,11 +140,8 @@ nlohmann::json heatmapReport(const LogReplay& replay, const World& world, GpuOwn
     nlohmann::json hotspots = nlohmann::json::array();
     for (std::size_t k = 0; k < shown; ++k) {
         const int x = static_cast<int>(order[k] % kHeatmapSide), y = static_cast<int>(order[k] / kHeatmapSide);
-        hotspots.push_back({{"x", x},
-                            {"y", y},
-                            {"lat", maxLat - latSpan * y / (kHeatmapSide - 1)},
-                            {"lon", minLon + lonSpan * x / (kHeatmapSide - 1)},
-                            {"value", out.cells[order[k]]}});
+        hotspots.push_back(
+            {{"x", x}, {"y", y}, {"lat", city.latOf(y)}, {"lon", city.lonOf(x)}, {"value", out.cells[order[k]]}});
     }
     double placed = 0, smoothed = 0;
     for (float v : in.cells) {
@@ -135,11 +154,104 @@ nlohmann::json heatmapReport(const LogReplay& replay, const World& world, GpuOwn
         {"computedOn", where},
         {"width", kHeatmapSide},
         {"height", kHeatmapSide},
-        {"bounds", {{"minLat", minLat}, {"maxLat", maxLat}, {"minLon", minLon}, {"maxLon", maxLon}}},
+        {"bounds", city.bounds()},
         {"filter", {{"taps", kTaps}, {"sigmaCells", kSigmaCells}}},
         {"ordersPlaced", placed},
         {"smoothedTotal", smoothed},
         {"hotspots", hotspots},
+    };
+}
+
+// S1: el mapa de cobertura. Una grilla de kCoverageSide x kCoverageSide sobre la ciudad: las celdas por donde pasa
+// una calle cuestan kStreetCost y las demás kOffStreetCost; las de los restaurantes (todos los del mapa) valen 0.
+// 4 · lado barridos de Jacobi (en la GPU, por bloques; o en la CPU) y se comprueba que el campo ya no cambie con un
+// barrido más. Informa, sobre las celdas con calles, cuánto cuesta llegar al restaurante más cercano (en celdas
+// recorridas por calle: con el lado de la celda en metros, una distancia aproximada) y la celda peor cubierta.
+nlohmann::json coverageReport(const World& world, GpuOwner* gpu)
+{
+    const RoadGraph& graph = world.graph;
+    const CityGrid city(graph, kCoverageSide);
+    const std::size_t n = static_cast<std::size_t>(kCoverageSide) * kCoverageSide;
+    CoverageGrid grid{kCoverageSide, kCoverageSide, std::vector<std::uint32_t>(n, kOffStreetCost),
+                      std::vector<std::uint32_t>(n, kFar)};
+    for (const RoadGraph::DirectedStreet& street : graph.directedStreets()) {
+        // La calle, rasterizada: puntos a lo largo del segmento, uno por celda que cruza.
+        const Coordinates& a = graph.coordinates(street.from);
+        const Coordinates& b = graph.coordinates(street.to);
+        const int steps = 1 + std::max(std::abs(city.xOf(a.lon) - city.xOf(b.lon)),
+                                       std::abs(city.yOf(a.lat) - city.yOf(b.lat)));
+        for (int k = 0; k <= steps; ++k) {
+            const double f = static_cast<double>(k) / steps;
+            grid.cost[city.cellOf({a.lat + (b.lat - a.lat) * f, a.lon + (b.lon - a.lon) * f})] = kStreetCost;
+        }
+    }
+    for (const auto& restaurant : world.restaurantNode) {
+        grid.distance[city.cellOf(graph.coordinates(restaurant.second))] = 0;
+    }
+    const int sweeps = 4 * kCoverageSide;
+    std::vector<std::uint32_t> distance;
+    std::string where = "CPU";
+#ifdef DELIVERY_USE_CUDA
+    if (gpu != nullptr) {
+        distance = gpu->coverage(grid, sweeps, true).get().take().distance;
+        where = "GPU (" + gpu->deviceName() + ")";
+    }
+#else
+    (void)gpu;
+#endif
+    if (distance.empty()) {
+        distance = relaxCoverage(grid, sweeps);
+    }
+    CoverageGrid settled = grid;
+    settled.distance = distance;
+    const bool converged = relaxCoverage(settled, 1) == distance;
+
+    // El lado de la celda en metros (de oeste a este, a la latitud del medio).
+    const double midLat = (city.minLat + city.maxLat) / 2;
+    const double cellMeters = haversineMeters(midLat, city.minLon, midLat, city.maxLon) / (kCoverageSide - 1);
+    std::vector<std::uint32_t> streetCosts;
+    std::size_t unreached = 0, worst = 0;
+    for (std::size_t c = 0; c < n; ++c) {
+        const std::size_t x = c % kCoverageSide, y = c / kCoverageSide;
+        const bool border = x == 0 || y == 0 || x + 1 == kCoverageSide || y + 1 == kCoverageSide;
+        if (grid.cost[c] != kStreetCost || border) {  // el borde no se actualiza (coverage.hpp): no cuenta
+            continue;
+        }
+        if (distance[c] >= kFar) {
+            ++unreached;
+            continue;
+        }
+        streetCosts.push_back(distance[c]);
+        if (streetCosts.size() == 1 || distance[c] > distance[worst]) {
+            worst = c;
+        }
+    }
+    std::sort(streetCosts.begin(), streetCosts.end());
+    auto percentile = [&streetCosts](int p) {
+        return streetCosts.empty() ? 0u : streetCosts[(streetCosts.size() - 1) * static_cast<std::size_t>(p) / 100];
+    };
+    double sum = 0;
+    for (std::uint32_t d : streetCosts) {
+        sum += d;
+    }
+    const int wx = static_cast<int>(worst % kCoverageSide), wy = static_cast<int>(worst / kCoverageSide);
+    return {
+        {"computedOn", where},
+        {"width", kCoverageSide},
+        {"height", kCoverageSide},
+        {"bounds", city.bounds()},
+        {"cellMeters", cellMeters},
+        {"costs", {{"street", kStreetCost}, {"offStreet", kOffStreetCost}}},
+        {"sweeps", sweeps},
+        {"converged", converged},
+        {"restaurants", world.restaurantNode.size()},
+        {"streetCells", streetCosts.size() + unreached},
+        {"unreachedStreetCells", unreached},
+        {"meanCost", streetCosts.empty() ? 0.0 : sum / streetCosts.size()},
+        {"p50Cost", percentile(50)},
+        {"p90Cost", percentile(90)},
+        {"maxCost", streetCosts.empty() ? 0u : streetCosts.back()},
+        {"worstCovered", {{"x", wx}, {"y", wy}, {"lat", city.latOf(wy)}, {"lon", city.lonOf(wx)}}},
     };
 }
 
@@ -260,6 +372,7 @@ void writeReport(const LogReplay& replay, const World* world, GpuOwner* gpu, std
 
     if (world != nullptr) {
         report["c1_demandHeatmap"] = heatmapReport(replay, *world, gpu);
+        report["s1_coverage"] = coverageReport(*world, gpu);
     }
 
     nlohmann::json perRestaurant = nlohmann::json::object();

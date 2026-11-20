@@ -8,6 +8,7 @@
 //  - H2: las franjas de cada restaurante suman sus pedidos; cada pedido en la franja de su t; el pico es el máximo;
 //  - C1: los pedidos en la grilla = creados; lo suavizado conserva el total salvo bordes; celdas calientes en orden y
 //    dentro del mapa; sin mapa no aparece;
+//  - S1: el campo de cobertura convergió; toda celda con calles llega a un restaurante; percentiles en orden;
 //  - una línea del log que no es JSON, o a la que le falta un campo, se informa con su número de línea.
 // Sale con 0 si todo está bien.
 #include <algorithm>
@@ -167,6 +168,22 @@ int main(int argc, char** argv)
     writeReport(replay, nullptr, nullptr, noMap);
     ok &= check("C1: sin mapa, el reporte no la incluye",
                 nlohmann::json::parse(noMap.str()).count("c1_demandHeatmap") == 0);
+
+    // S1: el campo convergió; todas las celdas con calles (fuera del borde) llegan a algún restaurante (en
+    // equipetrol.json todo es alcanzable); p50 <= p90 <= máximo; la celda peor cubierta está dentro del mapa.
+    const nlohmann::json& s1 = report.at("s1_coverage");
+    std::cout << "S1: " << s1.at("streetCells") << " celdas con calles, costo p50 " << s1.at("p50Cost") << " / p90 "
+              << s1.at("p90Cost") << " / máx " << s1.at("maxCost") << " (celda de " << s1.at("cellMeters")
+              << " m) · calculado en " << s1.at("computedOn") << "\n";
+    ok &= check("S1: el campo convergió (un barrido más no lo cambia)", s1.at("converged").get<bool>());
+    ok &= check("S1: todas las celdas con calles llegan a un restaurante",
+                s1.at("streetCells").get<int>() > 0 && s1.at("unreachedStreetCells").get<int>() == 0);
+    const nlohmann::json& worst = s1.at("worstCovered");
+    ok &= check("S1: p50 <= p90 <= máximo y la peor celda dentro del mapa",
+                s1.at("p50Cost").get<int>() <= s1.at("p90Cost").get<int>() &&
+                    s1.at("p90Cost").get<int>() <= s1.at("maxCost").get<int>() &&
+                    worst.at("lat").get<double>() >= b.at("minLat").get<double>() - 1e-9 &&
+                    worst.at("lat").get<double>() <= b.at("maxLat").get<double>() + 1e-9);
 
     auto lineOfError = [](const std::string& text) {
         try {
