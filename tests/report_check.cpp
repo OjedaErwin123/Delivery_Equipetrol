@@ -11,6 +11,8 @@
 //  - S1: el campo de cobertura convergió; toda celda con calles llega a un restaurante; percentiles en orden;
 //  - S2: parte de la demanda de C1; queda a lo sumo kKeep^pasos del total; el pico baja;
 //  - P1: entregados = los del resumen; las tres fases suman los tiempos de entrega;
+//  - P2: el rodeo de los sentidos únicos = un cálculo independiente (Floyd–Warshall clásico y comparación ingenua);
+//    el peor par y su rodeo están en la tabla; ida y vuelta media de cada restaurante;
 //  - una línea del log que no es JSON, o a la que le falta un campo, se informa con su número de línea.
 // Sale con 0 si todo está bien.
 #include <algorithm>
@@ -22,6 +24,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "apsp.hpp"
+#include "asymmetry.hpp"
 #include "config.hpp"
 #include "diffusion.hpp"
 #include "grouping.hpp"
@@ -218,6 +222,36 @@ int main(int argc, char** argv)
               << " ms, llevar " << p1.at("avgMs").at("ride") << " ms · calculado en " << p1.at("computedOn") << "\n";
     ok &= check("P1: entregados = los del resumen", p1.at("delivered").get<int>() == s.delivered);
     ok &= check("P1: esperar + recoger + llevar = la suma de los tiempos de entrega", phaseSum == sum);
+
+    // P2: lo mismo que un cálculo independiente (Floyd–Warshall clásico de 1 hilo y la comparación ingenua; el reporte
+    // usa los dos por bloques con N hilos); el peor par existe en la tabla con ese rodeo; equipetrol.json tiene calles
+    // de sentido único, así que hay pares asimétricos; ida y vuelta media de cada restaurante.
+    const nlohmann::json& p2 = report.at("p2_oneWayDetours");
+    DistanceTable solved = initialTable(p.world->graph);
+    floydWarshall(solved);
+    const Asymmetry expected = asymmetryNaive(solved);
+    std::cout << "P2: " << p2.at("nodes") << " nodos, " << p2.at("asymmetricPairs") << " de " << p2.at("pairs")
+              << " pares con ida != vuelta (rodeo medio " << p2.at("avgDetourMeters") << " m, máximo "
+              << p2.at("worstPair").at("detourMeters") << " m), " << p2.at("oneWayOnlyPairs")
+              << " con un solo sentido · calculado en " << p2.at("computedOn") << "\n";
+    ok &= check("P2: pares, asimétricos, un solo sentido y suma = el cálculo independiente",
+                p2.at("pairs").get<std::uint64_t>() == expected.pairs &&
+                    p2.at("asymmetricPairs").get<std::uint64_t>() == expected.asymmetric &&
+                    p2.at("oneWayOnlyPairs").get<std::uint64_t>() == expected.oneWay &&
+                    p2.at("sumDetourMeters").get<std::uint64_t>() == expected.sumDiff && expected.asymmetric > 0);
+    const nlohmann::json& worstPair = p2.at("worstPair");
+    const std::size_t from = *p.world->graph.nodeIndex(worstPair.at("from").at("node").get<std::string>());
+    const std::size_t to = *p.world->graph.nodeIndex(worstPair.at("to").at("node").get<std::string>());
+    ok &= check("P2: el peor par es el del cálculo independiente y su rodeo = ida - vuelta en la tabla",
+                std::min(from, to) == expected.worstI() && std::max(from, to) == expected.worstJ() &&
+                    worstPair.at("detourMeters").get<std::uint32_t>() == expected.maxDiff() &&
+                    solved.at(from, to) - solved.at(to, from) == expected.maxDiff());
+    bool restaurantsOk = p2.at("restaurants").size() == p.world->restaurantNode.size();
+    for (const auto& r : p2.at("restaurants")) {
+        restaurantsOk &= r.at("nodes").get<std::size_t>() > 0 && r.at("avgOutMeters").get<double>() > 0 &&
+                         r.at("avgBackMeters").get<double>() > 0;
+    }
+    ok &= check("P2: ida y vuelta media de cada restaurante", restaurantsOk);
 
     auto lineOfError = [](const std::string& text) {
         try {

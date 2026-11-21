@@ -4,9 +4,12 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
+#include "apsp.hpp"
+#include "asymmetry.hpp"
 #include "coverage.hpp"
 #include "diffusion.hpp"
 #include "grouping.hpp"
@@ -323,6 +326,87 @@ nlohmann::json coverageReport(const World& world, GpuOwner* gpu)
     };
 }
 
+// P2: el rodeo de los sentidos únicos. Necesita la tabla de todos contra todos de la red (T1): con GPU la resuelve la
+// GPU (Floyd–Warshall por bloques, como al arrancar) y compara ida y vuelta con el kernel de corner turning con
+// relleno; sin GPU, la CPU (por bloques, N hilos) solo si la red tiene hasta kAsymmetryCpuNodes nodos (con la ciudad,
+// 4775 nodos, la tabla tarda ~19 s en la laptop: se omite y se dice por qué). Además, por restaurante, la ida media a
+// cada nodo contra la vuelta media desde él (dos lecturas de la tabla en la CPU: una fila y una columna).
+constexpr std::size_t kAsymmetryCpuNodes = 2000;
+
+nlohmann::json asymmetryReport(const World& world, GpuOwner* gpu)
+{
+    const RoadGraph& graph = world.graph;
+    DistanceTable table = initialTable(graph);
+    Asymmetry a;
+    std::string where;
+#ifdef DELIVERY_USE_CUDA
+    if (gpu != nullptr) {
+        table = gpu->apsp(std::move(table)).get().take().table;
+        a = gpu->asymmetry(table, AsymmetryGpu::Kernel::padded).get().take().totals;
+        where = "GPU (" + gpu->deviceName() + ")";
+    }
+#else
+    (void)gpu;
+#endif
+    if (where.empty()) {
+        if (graph.nodeCount() > kAsymmetryCpuNodes) {
+            return {{"computedOn", "no"},
+                    {"nodes", graph.nodeCount()},
+                    {"reason", "sin GPU, la tabla de todos contra todos de más de " +
+                                   std::to_string(kAsymmetryCpuNodes) + " nodos tarda demasiado en la CPU"}};
+        }
+        ThreadPool pool(ThreadPool::defaultSize());
+        floydWarshallBlocked(table, pool);
+        a = asymmetryParallel(table, pool);
+        where = "CPU";
+    }
+    nlohmann::json worst = nullptr;
+    if (a.asymmetric > 0) {
+        // El sentido largo del peor par primero.
+        std::size_t from = a.worstI(), to = a.worstJ();
+        if (table.at(from, to) < table.at(to, from)) {
+            std::swap(from, to);
+        }
+        auto place = [&graph](std::size_t node) {
+            const Coordinates& c = graph.coordinates(node);
+            return nlohmann::json{{"node", graph.nodeId(node)}, {"lat", c.lat}, {"lon", c.lon}};
+        };
+        worst = {{"from", place(from)},
+                 {"to", place(to)},
+                 {"longMeters", table.at(from, to)},
+                 {"shortMeters", table.at(to, from)},
+                 {"detourMeters", a.maxDiff()}};
+    }
+    nlohmann::json perRestaurant = nlohmann::json::object();
+    for (const auto& entry : world.restaurantNode) {
+        const std::size_t r = entry.second;
+        std::uint64_t out = 0, back = 0, nodes = 0;
+        for (std::size_t x = 0; x < table.n; ++x) {
+            const std::uint32_t go = table.at(r, x), home = table.at(x, r);
+            if (x != r && go < DistanceTable::kUnreachable && home < DistanceTable::kUnreachable) {
+                out += go;
+                back += home;
+                ++nodes;
+            }
+        }
+        perRestaurant[entry.first] = {{"nodes", nodes},
+                                      {"avgOutMeters", nodes == 0 ? 0.0 : static_cast<double>(out) / nodes},
+                                      {"avgBackMeters", nodes == 0 ? 0.0 : static_cast<double>(back) / nodes}};
+    }
+    return {
+        {"computedOn", where},
+        {"nodes", table.n},
+        {"pairs", a.pairs},
+        {"oneWayOnlyPairs", a.oneWay},
+        {"asymmetricPairs", a.asymmetric},
+        {"asymmetricShare", a.pairs == 0 ? 0.0 : static_cast<double>(a.asymmetric) / a.pairs},
+        {"sumDetourMeters", a.sumDiff},
+        {"avgDetourMeters", a.asymmetric == 0 ? 0.0 : static_cast<double>(a.sumDiff) / a.asymmetric},
+        {"worstPair", worst},
+        {"restaurants", perRestaurant},
+    };
+}
+
 }  // namespace
 
 void writeReport(const LogReplay& replay, const World* world, GpuOwner* gpu, std::ostream& out)
@@ -476,6 +560,7 @@ void writeReport(const LogReplay& replay, const World* world, GpuOwner* gpu, std
         report["c1_demandHeatmap"] = heatmapReport(replay, *world, gpu);
         report["s1_coverage"] = coverageReport(*world, gpu);
         report["s2_demandDiffusion"] = diffusionReport(replay, *world, gpu);
+        report["p2_oneWayDetours"] = asymmetryReport(*world, gpu);
     }
 
     nlohmann::json perRestaurant = nlohmann::json::object();

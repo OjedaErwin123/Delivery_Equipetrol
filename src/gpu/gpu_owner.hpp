@@ -7,6 +7,7 @@
 
 #include "apsp.hpp"
 #include "gpu/apsp_gpu.hpp"
+#include "gpu/asymmetry_gpu.hpp"
 #include "gpu/coverage_gpu.hpp"
 #include "gpu/diffusion_gpu.hpp"
 #include "gpu/grouping_gpu.hpp"
@@ -123,6 +124,15 @@ public:
     // campo (SoA: las columnas se arman en el hilo dueño antes de copiarlas; eso no entra en el tiempo de la GPU).
     std::future<ThreadPool::Outcome<PhasesResult>> phases(std::vector<OrderRecord> records, bool aos);
 
+    struct AsymmetryResult {
+        Asymmetry totals;
+        AsymmetryGpu::Timing timing;
+    };
+    // P2: encola la comparación de ida y vuelta de cada par de la tabla de todos contra todos, con uno de los tres
+    // kernels (ingenuo, corner turning, corner turning con relleno). La tabla viaja por valor. La memoria se reserva
+    // en el primer pedido o si llega una tabla más grande.
+    std::future<ThreadPool::Outcome<AsymmetryResult>> asymmetry(DistanceTable table, AsymmetryGpu::Kernel kernel);
+
     // El nombre del dispositivo (leído en el hilo dueño al crear el objeto).
     const std::string& deviceName() const { return _deviceName; }
 
@@ -146,6 +156,8 @@ private:
     std::size_t _diffusionCells = 0;                            // ídem
     std::unique_ptr<PhasesGpu> _phases;                         // ídem
     std::size_t _phasesCapacity = 0;                            // ídem
+    std::unique_ptr<AsymmetryGpu> _asymmetry;                   // ídem
+    std::size_t _asymmetryStride = 0;                           // ídem
     std::string _deviceName;
     ThreadPool _thread{1};                  // se destruye primero: join antes de que _nearest deje de existir
 };

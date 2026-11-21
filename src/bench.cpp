@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "apsp.hpp"
+#include "asymmetry.hpp"
 #include "coverage.hpp"
 #include "diffusion.hpp"
 #include "grouping.hpp"
@@ -748,6 +749,72 @@ void benchPhases(const SimParams&, Csv& csv, std::ostream& progress, int repetit
     }
 }
 
+// P2: el rodeo de los sentidos únicos (ida contra vuelta de cada par de la tabla de todos contra todos). Tamaño =
+// valores de la tabla (n x n): lados de 128 a 4096 (de 16 mil a 16,8 millones, tres órdenes de magnitud; la ciudad,
+// 4775 nodos = 22,8 millones). Tablas sintéticas (syntheticTable, semilla fija): el acceso a memoria no depende de los
+// valores, y así no hace falta resolver Floyd–Warshall en la CPU para cada tamaño. cpu_1 = por bloques (la mejor de 1
+// hilo); cpu_1_naive lee la vuelta por columnas; cpu_threads, por bloques. En la GPU, la versión que se usa es la de
+// corner turning con relleno; gpu_kernel_naive (sin coalescer) y gpu_kernel_tiled (sin relleno), para comparar.
+void benchAsymmetry(const SimParams&, Csv& csv, std::ostream& progress, int repetitions, GpuOwner* gpu)
+{
+    static const char* kApp = "p2_asymmetry";
+    std::map<std::size_t, std::unique_ptr<ThreadPool>> pools;
+    for (std::size_t t : threadCounts()) {
+        pools[t] = std::make_unique<ThreadPool>(t);
+    }
+#ifndef DELIVERY_USE_CUDA
+    (void)gpu;
+#endif
+    for (std::size_t n : {std::size_t{128}, std::size_t{256}, std::size_t{512}, std::size_t{1024}, std::size_t{2048},
+                          std::size_t{4096}}) {
+        const DistanceTable table = syntheticTable(n, static_cast<std::uint32_t>(41 + n));
+        const Asymmetry reference = asymmetryNaive(table);
+        const std::size_t size = n * n;
+        auto runAll = [&](int rep) {
+            auto start = std::chrono::steady_clock::now();
+            bool ok = asymmetryBlocked(table) == reference;
+            double took = msSince(start);
+            if (rep >= 0) {
+                csv.row(kApp, "cpu_1", 1, size, rep, took, ok);
+            }
+            start = std::chrono::steady_clock::now();
+            ok = asymmetryNaive(table) == reference;
+            took = msSince(start);
+            if (rep >= 0) {
+                csv.row(kApp, "cpu_1_naive", 1, size, rep, took, ok);
+            }
+            for (auto& pool : pools) {
+                start = std::chrono::steady_clock::now();
+                ok = asymmetryParallel(table, *pool.second) == reference;
+                took = msSince(start);
+                if (rep >= 0) {
+                    csv.row(kApp, "cpu_threads", pool.first, size, rep, took, ok);
+                }
+            }
+#ifdef DELIVERY_USE_CUDA
+            start = std::chrono::steady_clock::now();
+            const GpuOwner::AsymmetryResult padded = gpu->asymmetry(table, AsymmetryGpu::Kernel::padded).get().take();
+            took = msSince(start);
+            ok = padded.totals == reference;
+            const GpuOwner::AsymmetryResult naive = gpu->asymmetry(table, AsymmetryGpu::Kernel::naive).get().take();
+            const GpuOwner::AsymmetryResult tiled = gpu->asymmetry(table, AsymmetryGpu::Kernel::tiled).get().take();
+            if (rep >= 0) {
+                csv.row(kApp, "gpu_kernel", 1, size, rep, padded.timing.kernelMs, ok);
+                csv.row(kApp, "gpu_end_to_end", 1, size, rep, padded.timing.endToEndMs, ok);
+                csv.row(kApp, "gpu_via_owner", 1, size, rep, took, ok);
+                csv.row(kApp, "gpu_kernel_naive", 1, size, rep, naive.timing.kernelMs, naive.totals == reference);
+                csv.row(kApp, "gpu_kernel_tiled", 1, size, rep, tiled.timing.kernelMs, tiled.totals == reference);
+            }
+#endif
+        };
+        runAll(-1);
+        for (int rep = 0; rep < repetitions; ++rep) {
+            runAll(rep);
+        }
+        progress << kApp << " n=" << n << ":" << csv.medians() << "\n";
+    }
+}
+
 }  // namespace
 
 int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& progress, int repetitions,
@@ -765,6 +832,7 @@ int runBenchmarks(const SimParams& params, std::ostream& csv, std::ostream& prog
         {"s1_coverage", benchCoverage},
         {"s2_diffusion", benchDiffusion},
         {"p1_phases", benchPhases},
+        {"p2_asymmetry", benchAsymmetry},
     };
     if (!only.empty() &&
         std::none_of(apps.begin(), apps.end(), [&only](const auto& app) { return app.first == only; })) {

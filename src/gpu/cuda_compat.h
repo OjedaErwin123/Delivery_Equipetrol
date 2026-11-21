@@ -466,6 +466,10 @@ inline unsigned atomicMax(unsigned* address, unsigned value) {
   return emu::atomicStoreMaximum(address, value);
 }
 
+inline unsigned long long atomicMax(unsigned long long* address, unsigned long long value) {
+  return emu::atomicStoreMaximum(address, value);
+}
+
 inline int atomicSub(int* address, int value) {
   return __atomic_fetch_sub(address, value, emu::kCudaAtomicFunctionOrder);
 }

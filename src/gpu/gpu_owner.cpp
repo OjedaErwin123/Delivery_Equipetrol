@@ -32,6 +32,7 @@ GpuOwner::~GpuOwner()
             _coverage.reset();
             _diffusion.reset();
             _phases.reset();
+            _asymmetry.reset();
             return true;
         })
         .get();
@@ -181,6 +182,21 @@ std::future<ThreadPool::Outcome<GpuOwner::PhasesResult>> GpuOwner::phases(std::v
         PhasesResult result;
         result.totals = aos ? _phases->fromRecords(records, &result.timing)
                             : _phases->fromColumns(columnsOf(records), &result.timing);
+        return result;
+    });
+}
+
+std::future<ThreadPool::Outcome<GpuOwner::AsymmetryResult>> GpuOwner::asymmetry(DistanceTable table,
+                                                                                AsymmetryGpu::Kernel kernel)
+{
+    return _thread.submit([this, table = std::move(table), kernel] {
+        if (!_asymmetry || table.stride > _asymmetryStride) {
+            _asymmetry.reset();  // primero liberar: la tabla vieja y la nueva no tienen que entrar juntas
+            _asymmetryStride = table.stride;
+            _asymmetry = std::make_unique<AsymmetryGpu>(_asymmetryStride);
+        }
+        AsymmetryResult result;
+        result.totals = _asymmetry->compare(table, kernel, &result.timing);
         return result;
     });
 }
