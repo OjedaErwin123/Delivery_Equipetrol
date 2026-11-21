@@ -1,4 +1,5 @@
-// delivery_sim <config.json> [--log <path>] [--headless] [--bench <csv>] [--bench-once] [--bench-app <nombre>]
+// delivery_sim <config.json> [--log <path>] [--headless] [--report <json>] [--frames]
+// delivery_sim <config.json> --bench <csv> | --bench-once [--bench-app <nombre>]
 //
 // Con --bench o --bench-once no simula: mide las aplicaciones de GPU de EC2 (bench.hpp) y termina. Con
 // --headless no abre la ventana (la simulación es la misma).
@@ -17,6 +18,7 @@
 #include "bench.hpp"
 #include "cli.hpp"
 #include "config.hpp"
+#include "frame_meter.hpp"
 #include "report.hpp"
 #ifdef DELIVERY_USE_CUDA
 #include "apsp.hpp"
@@ -118,18 +120,36 @@ int main(int argc, char** argv)
     // escribe y lo lee solo este hilo (el hook corre en el bucle de frames, en el hilo principal).
     auto lastFrame = std::chrono::steady_clock::now();
     bool closedFromWindow = false;
+    // EC2 (--frames): cuánto dura cada vuelta del bucle de frames. Lo usa solo este hilo, como lastFrame.
+    FrameMeter meter;
+    const bool measureFrames = args.frames;
     if (window) {
-        onFrame = [&window, &lastFrame, &closedFromWindow](const Frame& frame) {
+        onFrame = [&window, &lastFrame, &closedFromWindow, &meter, measureFrames](const Frame& frame) {
+            if (measureFrames) {
+                meter.tick();
+            }
             lastFrame = std::chrono::steady_clock::now();
             closedFromWindow = !window->draw(frame);  // se pidió terminar desde la ventana
             return !closedFromWindow;
         };
     } else {
         std::cerr << "delivery_sim: sin ventana: " << whyNot << "; la simulación sigue igual\n";
+        if (measureFrames) {
+            // Sin ventana, el bucle arma igual la foto de cada frame (lo que leería la ventana: cada moto con su
+            // lock y los contadores con el del log), pero no la dibuja.
+            onFrame = [&meter](const Frame&) {
+                meter.tick();
+                return true;
+            };
+        }
     }
 
     installStopSignalHandlers();  // antes de lanzar hilos: Ctrl+C o kill detienen la simulación ordenadamente
     const Summary summary = runSimulation(params, log, std::cout, stopSignalFlag(), onFrame);
+    if (measureFrames) {
+        std::cerr << "delivery_sim: " << (window ? "con ventana" : "sin ventana (la foto, sin dibujar)") << ", "
+                  << meter.summary() << "\n";
+    }
     std::cout << toJson(summary) << std::endl;  // última línea de stdout (endl: sale ya, antes de la pantalla final)
     if (window) {
         // El resumen en la ventana. Tras una señal o un pedido desde la ventana, hasta 2 s después

@@ -29,7 +29,7 @@ CliArgs parseArgs(const std::vector<std::string>& args)
             {"--bench-app", "--bench-app necesita el nombre de una aplicación"},
             {"--report", "--report necesita la ruta del archivo del reporte"},
         };
-        if (flag != "--headless" && flag != "--bench-once" && withValue.count(flag) == 0) {
+        if (flag != "--headless" && flag != "--bench-once" && flag != "--frames" && withValue.count(flag) == 0) {
             throw CliError("argumento desconocido '" + flag + "'");
         }
         if (!seen.insert(flag).second) {
@@ -39,6 +39,8 @@ CliArgs parseArgs(const std::vector<std::string>& args)
             result.headless = true;
         } else if (flag == "--bench-once") {
             result.benchOnce = true;
+        } else if (flag == "--frames") {
+            result.frames = true;
         } else {
             if (i + 1 == args.size() || isFlag(args[i + 1])) {
                 throw CliError(withValue.at(flag));
@@ -60,6 +62,9 @@ CliArgs parseArgs(const std::vector<std::string>& args)
     }
     if (!result.reportPath.empty() && result.bench()) {
         throw CliError("--report es de la simulación: no se combina con --bench ni --bench-once");
+    }
+    if (result.frames && result.bench()) {
+        throw CliError("--frames es de la simulación: no se combina con --bench ni --bench-once");
     }
     return result;
 }

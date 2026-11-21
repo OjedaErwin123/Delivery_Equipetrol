@@ -459,6 +459,11 @@ add_executable(asymmetry_check tests/asymmetry_check.cpp src/asymmetry.cpp src/t
 delivery_target_options(asymmetry_check)
 add_test(NAME asymmetry_check COMMAND asymmetry_check)
 
+# EC2, efecto en la simulación completa: el medidor de frames de --frames.
+add_executable(frame_meter_check tests/frame_meter_check.cpp)
+delivery_target_options(frame_meter_check)
+add_test(NAME frame_meter_check COMMAND frame_meter_check)
+
 add_executable(gpu_asymmetry_check tests/gpu_asymmetry_check.cu ${DELIVERY_GPU_SOURCES})
 delivery_target_options(gpu_asymmetry_check)
 add_test(NAME gpu_asymmetry_check COMMAND gpu_asymmetry_check)

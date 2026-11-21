@@ -1,0 +1,4 @@
+machine,version,repetition,real_s,startup_ms,created,assigned,delivered,rejected,queueFull,noCourier,unreachable,pending,dispatch_p50_sim_ms,dispatch_p90_sim_ms,dispatch_mean_sim_ms,dispatch_p50_real_ms,assigned_per_real_s,delivered_per_sim_hour,frames_per_s,frame_p50_ms,frame_p99_ms,frame_max_ms,frames_over_50ms,gpu_fallbacks,consistent
+Intel(R) Core(TM) i5-6300U CPU @ 2.40GHz x4,cpu,0,62.96,928.4,18215,1280,1153,16434,14666,1768,0,628,527974.0,597012.0,443117.0,8799.57,20.33,1153.0,29.43,33.26,59.79,124.6,22,0,yes
+Intel(R) Core(TM) i5-6300U CPU @ 2.40GHz x4,cpu,1,65.98,316.3,18215,1535,948,16180,14542,1638,0,1087,481266.0,597760.0,436978.2,8021.1,23.26,948.0,29.35,33.26,51.84,121.64,20,0,yes
+Intel(R) Core(TM) i5-6300U CPU @ 2.40GHz x4,cpu,2,61.62,427.5,18215,1498,1268,16216,14677,1539,0,731,551702.0,599384.0,472246.4,9195.03,24.31,1268.0,29.66,33.2,45.86,122.17,6,0,yes

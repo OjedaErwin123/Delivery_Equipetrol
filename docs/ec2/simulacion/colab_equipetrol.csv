@@ -1,0 +1,7 @@
+machine,version,repetition,real_s,startup_ms,created,assigned,delivered,rejected,queueFull,noCourier,unreachable,pending,dispatch_p50_sim_ms,dispatch_p90_sim_ms,dispatch_mean_sim_ms,dispatch_p50_real_ms,assigned_per_real_s,delivered_per_sim_hour,frames_per_s,frame_p50_ms,frame_p99_ms,frame_max_ms,frames_over_50ms,gpu_fallbacks,consistent
+Intel(R) Xeon(R) CPU @ 2.00GHz x2 | Tesla T4,gpu,0,60.43,310.8,217,143,127,23,8,15,0,67,135316.0,360048.0,166148.1,2255.27,2.37,127.0,30.19,33.1,33.34,34.51,0,0,yes
+Intel(R) Xeon(R) CPU @ 2.00GHz x2 | Tesla T4,cpu,0,60.01,4.2,217,143,127,23,8,15,0,67,135431.0,360045.0,166150.8,2257.18,2.38,127.0,30.19,33.1,33.22,34.38,0,0,yes
+Intel(R) Xeon(R) CPU @ 2.00GHz x2 | Tesla T4,gpu,1,60.41,286.3,217,143,127,23,8,15,0,67,135352.0,360193.0,166187.6,2255.87,2.37,127.0,30.19,33.1,33.24,34.9,0,0,yes
+Intel(R) Xeon(R) CPU @ 2.00GHz x2 | Tesla T4,cpu,1,60.01,4.4,217,144,127,22,8,14,0,68,143583.0,362994.0,169428.4,2393.05,2.4,127.0,30.2,33.09,33.22,34.66,0,0,yes
+Intel(R) Xeon(R) CPU @ 2.00GHz x2 | Tesla T4,gpu,2,60.4,279.9,217,144,127,22,8,14,0,68,143601.0,362984.0,169411.7,2393.35,2.38,127.0,30.21,33.08,33.22,34.73,0,0,yes
+Intel(R) Xeon(R) CPU @ 2.00GHz x2 | Tesla T4,cpu,2,60.01,4.3,217,143,127,23,8,15,0,67,135333.0,360031.0,166135.2,2255.55,2.38,127.0,30.21,33.08,33.29,34.58,0,0,yes

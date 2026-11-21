@@ -1,0 +1,2 @@
+delivery_sim: sin ventana: --headless; la simulación sigue igual
+delivery_sim: sin ventana (la foto, sin dibujar), frames: 1812, por segundo 30.19, intervalo mediana 33.10 ms, p99 33.22 ms, máximo 34.38 ms, de más de 50 ms: 0
