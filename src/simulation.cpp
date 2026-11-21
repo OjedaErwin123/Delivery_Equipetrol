@@ -25,6 +25,10 @@
 #include "shutdown.hpp"
 #include "sim_clock.hpp"
 #include "thread_pool.hpp"
+#ifdef DELIVERY_USE_CUDA
+#include "gpu/gpu_owner.hpp"
+#include "nearest.hpp"
+#endif
 
 namespace {
 
@@ -230,6 +234,38 @@ std::vector<std::size_t> nearest(std::vector<std::size_t> candidates, std::size_
     return chosen;
 }
 
+#ifdef DELIVERY_USE_CUDA
+// EC2, R1: lo mismo que nearest(), con el prefiltro en la GPU. Lee la posición de cada moto UNA vez (como
+// nearest()); la GPU devuelve un subconjunto que seguro contiene a las `limit` más cercanas y la CPU elige dentro
+// con el mismo criterio (nearestWithin): el resultado es el de nearest() sobre esa misma lectura (gpu_nearest_check).
+// Si la GPU no responde en quoteTimeoutMs (tiempo real) o falla, una línea en stderr y la misma selección en la CPU.
+std::vector<std::size_t> nearestWithGpu(GpuOwner& gpu, std::vector<std::size_t> candidates, std::size_t limit,
+                                        const World& world, const std::vector<std::shared_ptr<Courier>>& couriers,
+                                        const std::string& restaurant, std::int64_t quoteTimeoutMs)
+{
+    if (limit == 0 || candidates.size() <= limit) {
+        return candidates;
+    }
+    const Coordinates shop = world.graph.coordinates(world.restaurantNode.at(restaurant));
+    std::vector<Coordinates> at;
+    at.reserve(candidates.size());
+    for (std::size_t i : candidates) {
+        at.push_back(coordinatesOf(world.graph, couriers[i]->trip().to()));
+    }
+    auto superset = gpu.nearest(at, shop, limit);
+    if (superset.wait_for(std::chrono::milliseconds(quoteTimeoutMs)) == std::future_status::ready) {
+        try {
+            return nearestWithin(at, candidates, superset.get().take().superset, shop, limit);
+        } catch (const std::exception& error) {  // el error de CUDA cruzó de hilo por el future
+            std::cerr << "delivery_sim: prefiltro en la GPU fallido (" << error.what() << "); se hace en la CPU\n";
+        }
+    } else {
+        std::cerr << "delivery_sim: el prefiltro en la GPU no respondió en quoteTimeoutMs; se hace en la CPU\n";
+    }
+    return nearestOf(at, candidates, shop, limit);
+}
+#endif
+
 int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log, OrderBook& book,
                        const std::vector<std::shared_ptr<Courier>>& couriers, Fleet& fleet, ThreadPool& pool,
                        const Shutdown& shutdown, std::vector<double>& roundMs)
@@ -246,8 +282,15 @@ int dispatchByEstimate(const SimParams& p, const SimClock& clock, EventLog& log,
                 break;
             }
             const std::size_t limit = widen ? 0 : p.candidateLimit;
+#ifdef DELIVERY_USE_CUDA
+            const std::vector<std::size_t> candidates =
+                p.gpu ? nearestWithGpu(*p.gpu, fleet.withSpace(), limit, *p.world, couriers, order->restaurant(),
+                                       p.quoteTimeoutMs)
+                      : nearest(fleet.withSpace(), limit, *p.world, couriers, order->restaurant());
+#else
             const std::vector<std::size_t> candidates =
                 nearest(fleet.withSpace(), limit, *p.world, couriers, order->restaurant());
+#endif
             const PlannedOrder planned{order->restaurant(), order->destination(), now + order->prepMs(), false};
             const auto roundStart = std::chrono::steady_clock::now();
             std::vector<std::future<ThreadPool::Outcome<std::int64_t>>> etas;

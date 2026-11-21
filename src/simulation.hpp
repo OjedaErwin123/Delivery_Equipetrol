@@ -16,6 +16,8 @@
 #include "event_log.hpp"
 #include "travel.hpp"
 
+class GpuOwner;  // gpu/gpu_owner.hpp (EC2)
+
 // Ids "r0", "r1", ... (o "n0", ...): los valores por defecto de las pruebas.
 inline std::vector<std::string> numberedIds(const std::string& prefix, int count)
 {
@@ -72,6 +74,9 @@ struct SimParams {
     std::int64_t durationS = 0;           // fin por tiempo simulado; 0 = hasta una señal (o hasta `orders`)
     // Variante B: el bloque kitchen (pausas de la ventanilla). Sin valor, sin pausas.
     std::optional<KitchenConfig> pauses;
+    // EC2 (solo con USE_CUDA): el hilo dueño de la GPU. Con valor, el despachador hace en la GPU el prefiltro de
+    // las motos más cercanas (R1); el resultado es el mismo que en la CPU. nullptr = todo en la CPU.
+    std::shared_ptr<GpuOwner> gpu;
 };
 
 // Los parámetros que salen del archivo de configuración (ya validado): motos, semilla,

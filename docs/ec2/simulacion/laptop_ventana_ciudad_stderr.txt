@@ -1,0 +1,1 @@
+delivery_sim: con ventana, frames: 689, por segundo 11.57, intervalo mediana 81.83 ms, p99 208.90 ms, máximo 246.08 ms, de más de 50 ms: 688

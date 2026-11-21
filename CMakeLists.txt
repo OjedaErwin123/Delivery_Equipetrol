@@ -22,10 +22,37 @@ if(ENABLE_TSAN AND NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   message(FATAL_ERROR "ENABLE_TSAN requiere GCC o Clang")
 endif()
 
+# --- GPU (EC2): apagada por defecto ---
+# Sin USE_CUDA, todo compila con el CMake 3.11 de la sección 8 y los .cu se compilan como C++ (ver
+# delivery_cuda_sources). Con USE_CUDA=ON los compila nvcc; eso pide CMake 3.18 (CMAKE_CUDA_ARCHITECTURES y
+# CUDA 17), que solo se usa en la máquina con GPU (Google Colab). Arquitectura por defecto: sm_75, la T4.
+option(USE_CUDA "Compilar los kernels con nvcc para una GPU NVIDIA real (pide CMake >= 3.18)" OFF)
+if(USE_CUDA)
+  if(CMAKE_VERSION VERSION_LESS 3.18)
+    message(FATAL_ERROR "USE_CUDA=ON pide CMake 3.18 o posterior (sin CUDA alcanza 3.11)")
+  endif()
+  if(ENABLE_TSAN)
+    message(FATAL_ERROR "USE_CUDA y ENABLE_TSAN no se combinan: TSan se corre sobre el build sin CUDA")
+  endif()
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 75)
+  endif()
+  enable_language(CUDA)
+  set(CMAKE_CUDA_STANDARD 17)
+  set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+  set(CMAKE_CUDA_EXTENSIONS OFF)
+endif()
+
 # --- Dependencias ---
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
-find_package(OpenCV 4.1 REQUIRED COMPONENTS core imgproc imgcodecs highgui)
+# Ventana (OpenCV): encendida por defecto, como pide la sección 8. Apagada, delivery_sim se compila sin
+# OpenCV y corre sin ventana, igual que cuando no hay pantalla. Sirve en la máquina con GPU (Google Colab),
+# donde no hay pantalla e instalar libopencv-dev tarda más de 30 minutos.
+option(DELIVERY_WINDOW "Compilar la ventana con OpenCV" ON)
+if(DELIVERY_WINDOW)
+  find_package(OpenCV 4.1 REQUIRED COMPONENTS core imgproc imgcodecs highgui)
+endif()
 
 # JSON: nlohmann/json 3.12.0 (MIT, solo headers). FetchContent lo descarga al configurar
 # (necesita internet en `cmake ..`): solo los headers del release, verificados por hash.
@@ -60,7 +87,11 @@ function(delivery_target_options target)
   target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
   target_link_libraries(${target} PRIVATE Threads::Threads)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(${target} PRIVATE -Wall -Wextra)
+    # Solo a los archivos de C++: nvcc no entiende -Wall; a los .cu se los pasa al compilador del host.
+    target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall> $<$<COMPILE_LANGUAGE:CXX>:-Wextra>)
+    if(USE_CUDA)
+      target_compile_options(${target} PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra>)
+    endif()
     if(DELIVERY_WERROR)
       target_compile_options(${target} PRIVATE -Werror)
     endif()
@@ -89,16 +120,42 @@ add_executable(delivery_sim
   src/fleet.cpp
   src/order_book.cpp
   src/event_log.cpp
-  src/window.cpp
+  src/nearest.cpp
+  src/apsp.cpp
+  src/histogram.cpp
+  src/grouping.cpp
+  src/segment_stats.cpp
+  src/slot_histogram.cpp
+  src/heatmap.cpp
+  src/coverage.cpp
+  src/diffusion.cpp
+  src/phases.cpp
+  src/asymmetry.cpp
+  src/report.cpp
+  src/bench.cpp
 )
 delivery_target_options(delivery_sim)
-if(ENABLE_TSAN)
-  # Supresiones de TSan para las bibliotecas gráficas que usa OpenCV (ver el archivo).
-  target_sources(delivery_sim PRIVATE src/tsan_suppressions.cpp)
+target_link_libraries(delivery_sim PRIVATE nlohmann_json)
+if(USE_CUDA)
+  # EC2: el hilo dueño de la GPU y los kernels. Sin USE_CUDA, delivery_sim no tiene nada de GPU (ni la emulación).
+  target_sources(delivery_sim PRIVATE src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu src/gpu/histogram_gpu.cu
+                 src/gpu/grouping_gpu.cu src/gpu/segment_stats_gpu.cu src/gpu/slot_histogram_gpu.cu
+                 src/gpu/heatmap_gpu.cu src/gpu/coverage_gpu.cu src/gpu/diffusion_gpu.cu
+                 src/gpu/phases_gpu.cu src/gpu/asymmetry_gpu.cu src/gpu/gpu_owner.cpp)
+  target_compile_definitions(delivery_sim PRIVATE DELIVERY_USE_CUDA)
 endif()
-# SYSTEM: los warnings de los headers de OpenCV no cuentan como nuestros.
-target_include_directories(delivery_sim SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(delivery_sim PRIVATE ${OpenCV_LIBS} nlohmann_json)
+if(DELIVERY_WINDOW)
+  target_sources(delivery_sim PRIVATE src/window.cpp)
+  if(ENABLE_TSAN)
+    # Supresiones de TSan para las bibliotecas gráficas que usa OpenCV (ver el archivo).
+    target_sources(delivery_sim PRIVATE src/tsan_suppressions.cpp)
+  endif()
+  # SYSTEM: los warnings de los headers de OpenCV no cuentan como nuestros.
+  target_include_directories(delivery_sim SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(delivery_sim PRIVATE ${OpenCV_LIBS})
+else()
+  target_sources(delivery_sim PRIVATE src/window_off.cpp)
+endif()
 
 # --- Pruebas: se compilan con `make` y se ejecutan con `ctest` ---
 enable_testing()
@@ -257,3 +314,156 @@ set_tests_properties(delivery_sim_sin_argumentos delivery_sim_archivo_inexistent
 if(ENABLE_TSAN)
   message(STATUS "ThreadSanitizer: activado")
 endif()
+
+# --- GPU (EC2): kernels y sus pruebas de igualdad ---
+# Con USE_CUDA=ON los .cu los compila nvcc. Sin CUDA, el compilador de C++ los compila como C++ (-x c++) y
+# src/gpu/cuda_compat.h emula la GPU con hilos: sirve para las pruebas gpu_*_check (el kernel da lo mismo que
+# la CPU), nunca para medir. COMPILE_OPTIONS de un archivo existe desde CMake 3.11.
+function(delivery_cuda_sources)
+  if(NOT USE_CUDA)
+    set_source_files_properties(${ARGN} PROPERTIES LANGUAGE CXX COMPILE_OPTIONS "-x;c++")
+  endif()
+endfunction()
+
+delivery_cuda_sources(tests/gpu_smoke_check.cu tests/gpu_nearest_check.cu tests/gpu_apsp_check.cu
+                      tests/gpu_histogram_check.cu tests/gpu_grouping_check.cu tests/gpu_segment_stats_check.cu
+                      tests/gpu_slot_histogram_check.cu tests/gpu_heatmap_check.cu tests/gpu_coverage_check.cu
+                      tests/gpu_diffusion_check.cu tests/gpu_phases_check.cu tests/gpu_asymmetry_check.cu
+                      src/gpu/nearest_gpu.cu
+                      src/gpu/apsp_gpu.cu src/gpu/histogram_gpu.cu src/gpu/grouping_gpu.cu src/gpu/segment_stats_gpu.cu
+                      src/gpu/slot_histogram_gpu.cu src/gpu/heatmap_gpu.cu src/gpu/coverage_gpu.cu
+                      src/gpu/diffusion_gpu.cu src/gpu/phases_gpu.cu src/gpu/asymmetry_gpu.cu)
+# Lo que usa el hilo dueño de la GPU (gpu_owner.cpp): todas las aplicaciones.
+set(DELIVERY_GPU_SOURCES src/gpu/nearest_gpu.cu src/gpu/apsp_gpu.cu src/gpu/histogram_gpu.cu src/gpu/grouping_gpu.cu
+    src/gpu/segment_stats_gpu.cu src/gpu/slot_histogram_gpu.cu src/gpu/heatmap_gpu.cu src/gpu/coverage_gpu.cu
+    src/gpu/diffusion_gpu.cu src/gpu/phases_gpu.cu src/gpu/asymmetry_gpu.cu src/gpu/gpu_owner.cpp src/nearest.cpp
+    src/apsp.cpp src/asymmetry.cpp src/histogram.cpp src/grouping.cpp src/segment_stats.cpp src/slot_histogram.cpp
+    src/heatmap.cpp src/coverage.cpp src/diffusion.cpp src/phases.cpp src/road_graph.cpp src/thread_pool.cpp)
+add_executable(gpu_smoke_check tests/gpu_smoke_check.cu)
+delivery_target_options(gpu_smoke_check)
+add_test(NAME gpu_smoke_check COMMAND gpu_smoke_check)
+
+# R1: las motos más cercanas (reducción). Versiones de CPU y prueba de igualdad de la GPU.
+add_executable(nearest_check tests/nearest_check.cpp src/nearest.cpp src/road_graph.cpp src/thread_pool.cpp)
+delivery_target_options(nearest_check)
+add_test(NAME nearest_check COMMAND nearest_check)
+
+add_executable(gpu_nearest_check tests/gpu_nearest_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_nearest_check)
+add_test(NAME gpu_nearest_check COMMAND gpu_nearest_check)
+
+# T1: la tabla de todos contra todos (Floyd–Warshall por bloques). Versiones de CPU y prueba de igualdad de la GPU.
+add_executable(apsp_check tests/apsp_check.cpp src/apsp.cpp src/road_graph.cpp src/thread_pool.cpp src/config.cpp)
+delivery_target_options(apsp_check)
+target_link_libraries(apsp_check PRIVATE nlohmann_json)
+add_test(NAME apsp_check COMMAND apsp_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
+
+add_executable(gpu_apsp_check tests/gpu_apsp_check.cu ${DELIVERY_GPU_SOURCES} src/config.cpp)
+delivery_target_options(gpu_apsp_check)
+target_link_libraries(gpu_apsp_check PRIVATE nlohmann_json)
+add_test(NAME gpu_apsp_check COMMAND gpu_apsp_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
+
+# H1: el histograma de los tiempos de entrega. Versiones de CPU, prueba de igualdad de la GPU y el reporte
+# (--report: la simulación, su log releído y el histograma).
+add_executable(histogram_check tests/histogram_check.cpp src/histogram.cpp src/thread_pool.cpp)
+delivery_target_options(histogram_check)
+add_test(NAME histogram_check COMMAND histogram_check)
+
+add_executable(gpu_histogram_check tests/gpu_histogram_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_histogram_check)
+add_test(NAME gpu_histogram_check COMMAND gpu_histogram_check)
+
+add_executable(report_check tests/report_check.cpp src/report.cpp src/apsp.cpp src/asymmetry.cpp src/histogram.cpp
+               src/grouping.cpp src/segment_stats.cpp src/slot_histogram.cpp src/heatmap.cpp src/coverage.cpp
+               src/diffusion.cpp src/phases.cpp src/config.cpp
+               src/simulation.cpp src/thread_pool.cpp src/estimate.cpp src/road_graph.cpp src/courier.cpp
+               src/travel.cpp src/restaurant.cpp src/fleet.cpp src/order_book.cpp src/event_log.cpp)
+delivery_target_options(report_check)
+target_link_libraries(report_check PRIVATE nlohmann_json)
+add_test(NAME report_check COMMAND report_check ${CMAKE_SOURCE_DIR}/config/equipetrol.json)
+
+# SC1: los pedidos agrupados por restaurante (counting sort estable con scan). Versiones de CPU y prueba de
+# igualdad de la GPU; el reporte lo prueba report_check.
+add_executable(grouping_check tests/grouping_check.cpp src/grouping.cpp src/thread_pool.cpp)
+delivery_target_options(grouping_check)
+add_test(NAME grouping_check COMMAND grouping_check)
+
+add_executable(gpu_grouping_check tests/gpu_grouping_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_grouping_check)
+add_test(NAME gpu_grouping_check COMMAND gpu_grouping_check)
+
+# R2: estadísticas por restaurante (reducción segmentada sobre los grupos de SC1). Versiones de CPU y prueba de
+# igualdad de la GPU; el reporte lo prueba report_check.
+add_executable(segment_stats_check tests/segment_stats_check.cpp src/segment_stats.cpp src/grouping.cpp
+               src/thread_pool.cpp)
+delivery_target_options(segment_stats_check)
+add_test(NAME segment_stats_check COMMAND segment_stats_check)
+
+add_executable(gpu_segment_stats_check tests/gpu_segment_stats_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_segment_stats_check)
+add_test(NAME gpu_segment_stats_check COMMAND gpu_segment_stats_check)
+
+# H2: los pedidos por (restaurante, franja de 10 minutos), histograma 2D privatizado. Versiones de CPU y prueba de
+# igualdad de la GPU (recorrido intercalado y contiguo); el reporte lo prueba report_check.
+add_executable(slot_histogram_check tests/slot_histogram_check.cpp src/slot_histogram.cpp src/thread_pool.cpp)
+delivery_target_options(slot_histogram_check)
+add_test(NAME slot_histogram_check COMMAND slot_histogram_check)
+
+add_executable(gpu_slot_histogram_check tests/gpu_slot_histogram_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_slot_histogram_check)
+add_test(NAME gpu_slot_histogram_check COMMAND gpu_slot_histogram_check)
+
+# C1: el mapa de calor de la demanda (convolución gaussiana, filtro en memoria constante). Versiones de CPU y prueba
+# de la GPU (básica y por bloques, dentro de la tolerancia de flotantes); el reporte lo prueba report_check.
+add_executable(heatmap_check tests/heatmap_check.cpp src/heatmap.cpp src/thread_pool.cpp)
+delivery_target_options(heatmap_check)
+add_test(NAME heatmap_check COMMAND heatmap_check)
+
+add_executable(gpu_heatmap_check tests/gpu_heatmap_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_heatmap_check)
+add_test(NAME gpu_heatmap_check COMMAND gpu_heatmap_check)
+
+# S1: el mapa de cobertura (stencil de 5 puntos, barridos de Jacobi). Versiones de CPU y prueba de igualdad de la GPU
+# (básica y por bloques con halo); el reporte lo prueba report_check.
+add_executable(coverage_check tests/coverage_check.cpp src/coverage.cpp src/thread_pool.cpp)
+delivery_target_options(coverage_check)
+add_test(NAME coverage_check COMMAND coverage_check)
+
+add_executable(gpu_coverage_check tests/gpu_coverage_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_coverage_check)
+add_test(NAME gpu_coverage_check COMMAND gpu_coverage_check)
+
+# S2: la difusión de la demanda (stencil de 5 puntos en flotantes, coarsening por columnas). Versiones de CPU y prueba
+# de la GPU dentro de la tolerancia de flotantes; el reporte lo prueba report_check.
+add_executable(diffusion_check tests/diffusion_check.cpp src/diffusion.cpp src/heatmap.cpp src/thread_pool.cpp)
+delivery_target_options(diffusion_check)
+add_test(NAME diffusion_check COMMAND diffusion_check)
+
+add_executable(gpu_diffusion_check tests/gpu_diffusion_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_diffusion_check)
+add_test(NAME gpu_diffusion_check COMMAND gpu_diffusion_check)
+
+# P1: las fases de los pedidos, AoS contra SoA (acceso coalescido). Versiones de CPU y prueba de igualdad de la GPU
+# (las dos disposiciones); el reporte lo prueba report_check.
+add_executable(phases_check tests/phases_check.cpp src/phases.cpp src/thread_pool.cpp)
+delivery_target_options(phases_check)
+add_test(NAME phases_check COMMAND phases_check)
+
+add_executable(gpu_phases_check tests/gpu_phases_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_phases_check)
+add_test(NAME gpu_phases_check COMMAND gpu_phases_check)
+
+# P2: el rodeo de los sentidos únicos (corner turning y conflictos de bancos). Versiones de CPU y prueba de igualdad
+# de la GPU (los tres kernels); el reporte lo prueba report_check.
+add_executable(asymmetry_check tests/asymmetry_check.cpp src/asymmetry.cpp src/thread_pool.cpp)
+delivery_target_options(asymmetry_check)
+add_test(NAME asymmetry_check COMMAND asymmetry_check)
+
+# EC2, efecto en la simulación completa: el medidor de frames de --frames.
+add_executable(frame_meter_check tests/frame_meter_check.cpp)
+delivery_target_options(frame_meter_check)
+add_test(NAME frame_meter_check COMMAND frame_meter_check)
+
+add_executable(gpu_asymmetry_check tests/gpu_asymmetry_check.cu ${DELIVERY_GPU_SOURCES})
+delivery_target_options(gpu_asymmetry_check)
+add_test(NAME gpu_asymmetry_check COMMAND gpu_asymmetry_check)

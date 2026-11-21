@@ -55,6 +55,14 @@ public:
     // `node`? Consulta lo precalculado: no hace trabajo al crear un pedido.
     bool reachableFromRestaurant(std::size_t restaurant, std::size_t node) const;
 
+    // Las aristas dirigidas (una calle de doble sentido aparece dos veces), con su largo. Solo lectura:
+    // la usa EC2 (T1) para armar la tabla de distancias de todos contra todos.
+    struct DirectedStreet {
+        std::size_t from, to;
+        double meters;
+    };
+    std::vector<DirectedStreet> directedStreets() const;
+
 private:
     struct Edge {
         std::size_t to;

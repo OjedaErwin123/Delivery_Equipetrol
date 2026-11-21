@@ -4,15 +4,34 @@
 #include <string>
 #include <vector>
 
-// Argumentos de línea de comandos (sección 5 del enunciado):
-//   delivery_sim <config.json> [--log <path>]
-// El primero es el archivo de configuración; después puede venir --log con la ruta del log.
+// Argumentos de línea de comandos (sección 5 del enunciado, más los modos de EC2):
+//   delivery_sim <config.json> [--log <path>] [--headless] [--report <json>] [--frames]
+//   delivery_sim <config.json> --bench <csv> | --bench-once [--bench-app <nombre>]
+// El primero es el archivo de configuración; después, en cualquier orden y a lo sumo una vez cada una:
+//   --log <path>   la ruta del log;
+//   --headless     sin ventana (para una máquina sin pantalla, como Google Colab); la simulación no cambia;
+//   --report <json>  al terminar (después del resumen), relee el log y escribe el reporte de las aplicaciones
+//                  de tipo A de EC2 (report.hpp); la simulación no cambia;
+//   --frames       al terminar, escribe en stderr cuánto duró cada vuelta del bucle de frames (EC2: si la
+//                  ventana mantiene sus ~30 por segundo); sin ventana, cada frame igual arma la foto que
+//                  dibujaría la ventana (lee cada moto con su lock), sin dibujarla; la simulación no cambia;
+//   --bench <csv>  no simula: mide las aplicaciones de GPU de EC2 (bench.hpp) y escribe el CSV;
+//   --bench-once   como --bench pero con una sola repetición por tamaño (para perfilar con ncu); sin --bench
+//                  no escribe CSV;
+//   --bench-app <nombre>  con --bench o --bench-once, mide solo esa aplicación (p. ej. t1_apsp).
 struct CliArgs {
     std::string configPath;
     std::string logPath = "events.log";
+    bool headless = false;
+    std::string benchPath;  // vacía = sin CSV
+    bool benchOnce = false;
+    std::string benchApp;   // vacía = todas
+    std::string reportPath; // vacía = sin reporte
+    bool frames = false;
+    bool bench() const { return !benchPath.empty() || benchOnce; }
 };
 
-// Argumentos que no se pueden usar. El enunciado solo define el de la configuración y --log:
+// Argumentos que no se pueden usar. Además de la configuración, solo existen las banderas de arriba:
 // cualquier otra cosa (una bandera desconocida, --log sin ruta) también es entrada inválida,
 // así un error de tipeo no deja el log en otro archivo sin avisar.
 class CliError : public std::runtime_error {

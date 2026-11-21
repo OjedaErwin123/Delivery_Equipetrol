@@ -1,0 +1,20 @@
+commit: 116dae1 wip: informe EC2 y efecto de la GPU en la simulación completa
+src/ = 2e712d209fac355c261a7b3987d04150aec80234
+--- lscpu
+CPU(s):                                  4
+Model name:                              Intel(R) Core(TM) i5-6300U CPU @ 2.40GHz
+Thread(s) per core:                      2
+Core(s) per socket:                      2
+Socket(s):                               1
+--- memoria
+               total        used        free      shared  buff/cache   available
+Mem:           3.8Gi       586Mi       3.0Gi       4.3Mi       339Mi       3.2Gi
+--- sistema
+Linux 6.18.58.1-microsoft-standard-WSL2
+PRETTY_NAME="Ubuntu 26.04 LTS"
+--- compilador
+g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+--- banderas
+CMAKE_BUILD_TYPE:STRING=Release
+CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG
+--- warnings del build: 0
